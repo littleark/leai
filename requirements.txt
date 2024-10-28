@@ -1,0 +1,5 @@
+docx2txt==0.8
+langchain==0.3.4
+langchain_community==0.3.3
+langchain_core==0.3.13
+streamlit==1.39.0
