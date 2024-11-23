@@ -15,7 +15,7 @@ CHANNELS = 1
 RATE = 48000
 CHUNK = 8000
 
-DEFAULT_URL = f"wss://api.deepgram.com/v1/speak?encoding=linear16&sample_rate={RATE}"
+DEFAULT_URL = f"wss://api.deepgram.com/v1/speak?encoding=linear16&model=aura-hera-en&sample_rate={RATE}"
 DEFAULT_TOKEN = os.environ.get("DEEPGRAM_API_KEY", None)
 
 

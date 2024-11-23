@@ -319,6 +319,17 @@ def create_rag(uploaded_file):
         st.session_state.rag_chain = rag_chain
         st.session_state.rag_created = True
 
+        # Generate welcome message with an interesting fact
+        welcome_prompt = f"Tell me an interesting fact from this book that would excite an 8-year-old reader."
+        welcome_response = rag_chain.invoke({
+            "question": welcome_prompt,
+            "chat_history": [],
+            "reader_name": current_reader_name
+        })
+
+        # Store welcome message in chat history
+        st.session_state.chat_history.append({"role": "assistant", "content": welcome_response})
+
         return rag_chain
 
     except Exception as e:
@@ -509,6 +520,14 @@ with st.sidebar:
 
                         print('Creating RAG system with rag_chain!!!!')
                         rag_chain = create_rag(uploaded_file)
+
+                        # Display the welcome message right after creation
+                        if st.session_state.chat_history:
+                            with st.chat_message("assistant"):
+                                st.markdown(st.session_state.chat_history[-1]["content"])
+                                if st.session_state.tts_enabled:
+                                    tts.play(st.session_state.chat_history[-1]["content"])
+
                         st.rerun()
 
                     except Exception as e:
@@ -516,35 +535,6 @@ with st.sidebar:
                         st.session_state.vectorstore = None
                         st.session_state.rag_chain = None
                         st.session_state.rag_created = False
-
-    # Clear database button
-    # if st.button('Clear Database'):
-    #     if os.path.exists(PERSIST_DIR):
-    #         import shutil
-    #         shutil.rmtree(PERSIST_DIR)
-    #         os.makedirs(PERSIST_DIR)
-    #     cleanup_chroma()
-    #     st.session_state.vectorstore = None
-    #     st.session_state.rag_chain = None
-    #     st.session_state.chat_history = []
-    #     st.session_state.book_title = None
-    #     st.session_state.reader_name = "Lucy"
-    #     st.session_state.first_run = True
-    #     st.session_state.rag_created = False
-    #     st.cache_data.clear()
-    #     st.cache_resource.clear()
-    #     st.success('Database and caches cleared!')
-
-# Chat interface
-# for message in st.session_state.chat_history:
-#     with st.chat_message(message["role"]):
-#         st.markdown(message["content"])
-#         # Play audio for assistant messages
-#         if message["role"] == "assistant" and st.session_state.tts_enabled and st.session_state.first_run:
-#             # play(message["content"])
-#             tts.play(message["content"])
-#             st.session_state.first_run = False
-
 
 if prompt := st.chat_input("Ask a question"):
     if st.session_state.rag_chain is None:
