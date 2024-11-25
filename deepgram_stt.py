@@ -1,144 +1,336 @@
-import os
-import threading
+import asyncio
 import json
-from dotenv import load_dotenv
-from websockets.sync.client import connect
+import os
+import wave
+from datetime import datetime
+from typing import Optional
+from urllib.parse import urlencode
+import numpy as np
 import pyaudio
+import websockets
+from dotenv import load_dotenv
+import threading
+import time
 
 load_dotenv()
 
-# WebSocket Configuration
-DEFAULT_URL = "wss://api.deepgram.com/v1/listen"
-DEFAULT_TOKEN = os.getenv("DEEPGRAM_API_KEY", None)
+class DeepgramTranscriber:
+    def __init__(self):
+        self.api_key = os.getenv("DEEPGRAM_API_KEY")
+        if not self.api_key:
+            raise ValueError("DEEPGRAM_API_KEY not found in environment variables")
 
-# Audio Configuration
-FORMAT = pyaudio.paInt16
-CHANNELS = 1
-RATE = 16000
-CHUNK = 1024  # Number of frames per buffer
+        self.websocket_url = "wss://api.deepgram.com/v1/listen"
 
+        # Simplified audio configuration
+        self.audio_config = {
+            "format": pyaudio.paInt16,
+            "channels": 1,
+            "rate": 16000,
+            "chunk": 4096,
+            "input_device_index": None,
+        }
 
-class SpeechToText:
-    def __init__(self, url=DEFAULT_URL, token=DEFAULT_TOKEN):
-        self.url = url
-        self.token = token
+        self.frames = []
         self.transcription = []
-        self.socket = None
-        self._stop_event = threading.Event()
-
-    def start_listening(self):
-        """Start listening to the WebSocket."""
-        self._stop_event.clear()
-        self.transcription = []
-
-        try:
-            print("Connecting to WebSocket...")
-            self.socket = connect(
-                self.url,
-                additional_headers={"Authorization": f"Token {self.token}"},
-            )
-            print("WebSocket connected.")
-
-            # Start processing responses
-            self._response_thread = threading.Thread(target=self.process_response, daemon=True)
-            self._response_thread.start()
-
-        except Exception as e:
-            print(f"Error connecting to WebSocket: {e}")
-
-    def stop_listening(self):
-        """Stop listening and return transcription."""
-        self._stop_event.set()
-        if self.socket:
-            self.socket.close()
-        if hasattr(self, "_response_thread"):
-            self._response_thread.join()
-        return " ".join(self.transcription)
-
-    def process_response(self):
-        """Process incoming audio transcription."""
-        print("Processing WebSocket responses...")
-        try:
-            while not self._stop_event.is_set():
-                message = self.socket.recv()
-                if message:
-                    print(f"WebSocket response: {message}")
-                    result = self._parse_transcription(message)
-                    if result:
-                        print(f"Recognized: {result}")
-                        self.transcription.append(result)
-                else:
-                    print("No response received from WebSocket.")
-        except Exception as e:
-            print(f"Error processing WebSocket response: {e}")
-
-    def _parse_transcription(self, message):
-        """Parse transcription from WebSocket response."""
-        try:
-            response = json.loads(message)
-            alternatives = response.get("channel", {}).get("alternatives", [])
-            if alternatives:
-                return alternatives[0].get("transcript", "")
-        except Exception as e:
-            print(f"Error parsing transcription: {e}")
-        return None
-
-
-class MicrophoneStreamer:
-    def __init__(self, stt: SpeechToText):
-        self.stt = stt
-        self._audio = pyaudio.PyAudio()
-        self._stop_event = threading.Event()
+        self.stop_flag = False
+        self.websocket = None
         self.stream = None
+        self.audio = None
+        self.last_audio_time = time.time()
 
-    def start_streaming(self):
-        """Start streaming audio from the microphone."""
+    async def connect_websocket(self):
+        """Establish WebSocket connection with Deepgram."""
+        extra_headers = {
+            "Authorization": f"Token {self.api_key}",
+        }
+
+        params = {
+            "encoding": "linear16",
+            "sample_rate": self.audio_config["rate"],
+            "channels": self.audio_config["channels"],
+            "model": "general",
+            "language": "en",
+            "punctuate": "true",
+            "endpointing": "500",  # Add endpointing for better sentence detection
+        }
+
+        url = f"{self.websocket_url}?{urlencode(params)}"
+        print(f"Connecting to URL: {url}")
+
         try:
-            print("Initializing microphone...")
-            self.stream = self._audio.open(
-                format=FORMAT,
-                channels=CHANNELS,
-                rate=RATE,
-                input=True,
-                frames_per_buffer=CHUNK,
-            )
-            self._stop_event.clear()
-            self.stt.start_listening()
-            print("Streaming audio...")
-            self._streaming_thread = threading.Thread(target=self._stream_audio, daemon=True)
-            self._streaming_thread.start()
+            self.websocket = await websockets.connect(url, extra_headers=extra_headers)
         except Exception as e:
-            print(f"Error initializing microphone: {e}")
+            print(f"Failed to connect to Deepgram: {e}")
+            self.websocket = None
 
-    def stop_streaming(self):
-        """Stop streaming audio."""
-        self._stop_event.set()
+    def save_audio(self, filename: Optional[str] = None):
+        """Save recorded audio to WAV file"""
+        if not self.frames:
+            print("No audio data to save")
+            return
+
+        if filename is None:
+            filename = f"recording_{datetime.now().strftime('%Y%m%d_%H%M%S')}.wav"
+
+        with wave.open(filename, 'wb') as wf:
+            wf.setnchannels(self.audio_config["channels"])
+            wf.setsampwidth(pyaudio.get_sample_size(self.audio_config["format"]))
+            wf.setframerate(self.audio_config["rate"])
+            wf.writeframes(b''.join(self.frames))
+
+        print(f"\nAudio saved to {filename}")
+
+    async def listen_and_transcribe(self):
+        """Listen and transcribe in real-time."""
+        self.stop_flag = False
+        self.frames = []
+        self.transcription = []
+
+        # Initialize PyAudio
+        self.audio = pyaudio.PyAudio()
+        self.stream = self.audio.open(
+            format=self.audio_config["format"],
+            channels=self.audio_config["channels"],
+            rate=self.audio_config["rate"],
+            input=True,
+            input_device_index=self.audio_config["input_device_index"],
+            frames_per_buffer=self.audio_config["chunk"],
+        )
+
+        # Connect to Deepgram WebSocket
+        await self.connect_websocket()
+        if not self.websocket:
+            return "Failed to connect to Deepgram"
+
+        try:
+            while not self.stop_flag:
+                data = self.stream.read(self.audio_config["chunk"], exception_on_overflow=False)
+                self.frames.append(data)
+
+                # Detect silence
+                audio_array = np.frombuffer(data, dtype=np.int16)
+                peak = np.max(np.abs(audio_array))
+                if peak > 500:
+                    self.last_audio_time = time.time()
+
+                if time.time() - self.last_audio_time > 2:
+                    self.stop_flag = True
+                    break
+
+                await self.websocket.send(data)
+                try:
+                    response = await asyncio.wait_for(self.websocket.recv(), timeout=0.1)
+                    json_response = json.loads(response)
+                    if "channel" in json_response:
+                        transcript = json_response["channel"]["alternatives"][0]["transcript"]
+                        if transcript.strip():
+                            self.transcription.append(transcript)
+                except asyncio.TimeoutError:
+                    continue
+        finally:
+            await self.cleanup()
+            return " ".join(self.transcription)
+
+    async def stop_listening(self):
+        """Manually stop listening."""
+        self.stop_flag = True
+        await self.cleanup()
+
+    async def cleanup(self):
+        """Clean up resources asynchronously."""
         if self.stream:
             self.stream.stop_stream()
             self.stream.close()
-        self._audio.terminate()
-        return self.stt.stop_listening()
+        if self.audio:
+            self.audio.terminate()
+        if self.websocket:
+            await self.websocket.close()
 
-    def _stream_audio(self):
-        """Stream audio data to the WebSocket."""
+
+
+
+class DeepgramTranscriberOld:
+    def __init__(self):
+            self.api_key = os.getenv("DEEPGRAM_API_KEY")
+            if not self.api_key:
+                raise ValueError("DEEPGRAM_API_KEY not found in environment variables")
+
+            self.websocket_url = "wss://api.deepgram.com/v1/listen"
+
+            # Simplified audio configuration
+            self.audio_config = {
+                "format": pyaudio.paInt16,
+                "channels": 1,
+                "rate": 16000,
+                "chunk": 1024,
+                "input_device_index": None,
+            }
+
+            self.frames = []
+            self.transcription = []
+            self.stop_flag = False
+            self.websocket = None
+            self.stream = None
+            self.audio = None
+            self.last_audio_time = time.time()
+
+    def list_audio_devices(self):
+        """List all available audio input devices"""
+        audio = pyaudio.PyAudio()
+        info = audio.get_host_api_info_by_index(0)
+        num_devices = info.get('deviceCount')
+
+        print("\nAvailable Audio Input Devices:")
+        print("-" * 30)
+
+        for i in range(num_devices):
+            device_info = audio.get_device_info_by_index(i)
+            if device_info.get('maxInputChannels') > 0:  # if it has input channels
+                print(f"Device {i}: {device_info.get('name')}")
+                print(f"  Max Input Channels: {device_info.get('maxInputChannels')}")
+                print(f"  Default Sample Rate: {device_info.get('defaultSampleRate')}")
+                print()
+
+        audio.terminate()
+
+        # Let user select device
+        # while True:
         try:
-            while not self._stop_event.is_set():
-                data = self.stream.read(CHUNK, exception_on_overflow=False)
-                print(f"Captured {len(data)} bytes from mic")
-                self.stt.socket.send(data)
+            device_index = 0 # int(input("Select input device by number (or press Enter for default): ").strip())
+            if 0 <= device_index < num_devices:
+                self.audio_config["input_device_index"] = device_index
+                # break
+        except ValueError:
+            self.audio_config["input_device_index"] = None
+            # break
+        print("Invalid device number, try again.")
+
+    def save_audio(self, filename: Optional[str] = None):
+        """Save recorded audio to WAV file"""
+        if not self.frames:
+            print("No audio data to save")
+            return
+
+        if filename is None:
+            filename = f"recording_{datetime.now().strftime('%Y%m%d_%H%M%S')}.wav"
+
+        with wave.open(filename, 'wb') as wf:
+            wf.setnchannels(self.audio_config["channels"])
+            wf.setsampwidth(pyaudio.get_sample_size(self.audio_config["format"]))
+            wf.setframerate(self.audio_config["rate"])
+            wf.writeframes(b''.join(self.frames))
+
+        print(f"\nAudio saved to {filename}")
+
+    async def connect_websocket(self):
+        """Establish WebSocket connection with Deepgram"""
+        extra_headers = {
+            "Authorization": f"Token {self.api_key}",
+        }
+
+        params = {
+            "encoding": "linear16",
+            "sample_rate": self.audio_config["rate"],
+            "channels": self.audio_config["channels"],
+            "model": "general",
+            "language": "en",
+            "punctuate": "true",
+            "endpointing": "500",  # Add endpointing for better sentence detection
+        }
+
+        url = f"{self.websocket_url}?{urlencode(params)}"
+        print(f"Connecting to URL: {url}")
+
+        try:
+            self.websocket = await websockets.connect(url, extra_headers=extra_headers)
         except Exception as e:
-            print(f"Error streaming audio: {e}")
+            print(f"Failed to connect to Deepgram: {e}")
+            self.websocket = None
 
+    async def listen_and_transcribe(self):
+        """Listen and transcribe in real-time."""
+        print("listening")
+        self.stop_flag = False
+        self.frames = []
+        self.transcription = []
 
-# Example Usage
+        # Initialize PyAudio
+        self.audio = pyaudio.PyAudio()
+        self.stream = self.audio.open(
+            format=self.audio_config["format"],
+            channels=self.audio_config["channels"],
+            rate=self.audio_config["rate"],
+            input=True,
+            input_device_index=self.audio_config["input_device_index"],
+            frames_per_buffer=self.audio_config["chunk"],
+        )
+
+        # Connect to Deepgram WebSocket
+        await self.connect_websocket()
+        if not self.websocket:
+            return "Failed to connect to Deepgram"
+
+        try:
+            while not self.stop_flag:
+                data = self.stream.read(self.audio_config["chunk"], exception_on_overflow=False)
+                self.frames.append(data)
+
+                # Detect silence
+                audio_array = np.frombuffer(data, dtype=np.int16)
+                peak = np.max(np.abs(audio_array))
+                if peak > 500:
+                    self.last_audio_time = time.time()
+
+                if time.time() - self.last_audio_time > 2:
+                    self.stop_flag = True
+                    break
+
+                await self.websocket.send(data)
+                try:
+                    response = await asyncio.wait_for(self.websocket.recv(), timeout=0.1)
+                    json_response = json.loads(response)
+                    if "channel" in json_response:
+                        transcript = json_response["channel"]["alternatives"][0]["transcript"]
+                        if transcript.strip():
+                            self.transcription.append(transcript)
+                except asyncio.TimeoutError:
+                    continue
+        finally:
+            self.cleanup()
+            return " ".join(self.transcription)
+
+    def stop_listening(self):
+        """Manually stop listening."""
+        self.stop_flag = True
+        self.cleanup()
+
+    def cleanup(self):
+        """Clean up resources."""
+        if self.stream:
+            self.stream.stop_stream()
+            self.stream.close()
+        if self.audio:
+            self.audio.terminate()
+        if self.websocket:
+            asyncio.run(self.websocket.close())
+
+def listen_and_transcribe_sync():
+    """Run the async function in a blocking way for Streamlit."""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    text = loop.run_until_complete(transcriber.listen_and_transcribe())
+    transcriber.save_audio()
+    print(text)
+    return text
+
+async def main():
+    transcriber = DeepgramTranscriber()
+    await transcriber.listen_and_transcribe()
+    transcriber.save_audio()
+
 if __name__ == "__main__":
-    stt = SpeechToText()
-    mic_streamer = MicrophoneStreamer(stt)
-
-    try:
-        print("Listening for speech...")
-        mic_streamer.start_streaming()
-        input("Press Enter to stop listening...\n")
-    finally:
-        result = mic_streamer.stop_streaming()
-        print(f"Transcribed Text: {result}")
+    transcriber = DeepgramTranscriber()
+    text = listen_and_transcribe_sync()
+    print(text)
+    # asyncio.run(main())

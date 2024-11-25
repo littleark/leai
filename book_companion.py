@@ -1,4 +1,5 @@
 import streamlit as st
+import asyncio
 from langchain_community.document_loaders import PyPDFLoader, TextLoader
 from langchain_community.vectorstores import Chroma
 from langchain_ollama import ChatOllama, OllamaEmbeddings
@@ -15,12 +16,19 @@ import chromadb
 from dotenv import load_dotenv
 # from tts_utils import initialize_tts, play
 from deepgram_tts import TextToSpeech
+from deepgram_stt import DeepgramTranscriber
 from micro import listen
 from typing import List, Dict
 import numpy as np
 from langchain_core.documents import Document
 from sklearn.metrics.pairwise import cosine_similarity
 import logging
+
+from enhanced_rag_content_processor import (
+    BookMetadata,
+    create_enhanced_rag_content,
+    process_document_with_enhancements
+)
 
 
 # Configure logging
@@ -37,6 +45,9 @@ MAX_HISTORY_LENGTH = 4
 if 'rag_created' not in st.session_state:
     st.session_state.rag_created = False
 
+if 'welcome_message_delivered' not in st.session_state:
+    st.session_state.welcome_message_delivered = False
+
 if 'rag_chain' not in st.session_state:
     st.session_state.rag_chain = None
 
@@ -47,7 +58,7 @@ if 'vectorstore' not in st.session_state:
     st.session_state.vectorstore = None
 
 if 'temperature' not in st.session_state:
-    st.session_state.temperature = 0.0
+    st.session_state.temperature = 0.2
 
 if 'prompt_type' not in st.session_state:
     st.session_state.prompt_type = "SIMPLE"
@@ -64,6 +75,9 @@ if 'reader_name' not in st.session_state:
 if 'first_run' not in st.session_state:
     st.session_state.first_run = True
 
+if 'tts' not in st.session_state:
+    st.session_state.tts = None
+
 # Create a persistent directory for the database
 PERSIST_DIR = os.path.join(os.getcwd(), 'db')
 if not os.path.exists(PERSIST_DIR):
@@ -71,6 +85,36 @@ if not os.path.exists(PERSIST_DIR):
 
 @st.cache_data
 def process_document(uploaded_file, chunk_size=800, chunk_overlap=100):
+    """Process and split the uploaded document using enhanced content processor."""
+    print(f"Processing file: {uploaded_file.name} of type: {uploaded_file.type}")
+
+    try:
+        # Use the enhanced processor
+        doc_splits = process_document_with_enhancements(
+            uploaded_file,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap
+        )
+
+        # Add debug information
+        print(f"Document split into {len(doc_splits)} chunks")
+        print(f"Average chunk size: {sum(len(chunk.page_content) for chunk in doc_splits) / len(doc_splits):.0f} characters")
+
+        # Print a sample chunk for verification
+        if doc_splits:
+            print("\nSample chunk:")
+            print("-" * 50)
+            print(doc_splits[0].page_content[:200] + "...")
+            print("-" * 50)
+
+        return doc_splits
+
+    except Exception as e:
+        print(f"Error processing document: {str(e)}")
+        raise e
+
+@st.cache_data
+def process_document_old(uploaded_file, chunk_size=800, chunk_overlap=100):
     """Process and split the uploaded document using RecursiveCharacterTextSplitter."""
     print(f"Processing file: {uploaded_file.name} of type: {uploaded_file.type}")
     print(f"Chunk size: {chunk_size}, chunk overlap: {chunk_overlap}")
@@ -138,7 +182,53 @@ def get_embeddings_model():
     )
 
 # Enhanced prompt template with strict instructions
+# ADD STRICT RULES (check jailbreaks how claude or chatgpt does it) -> in the first attempt.
 def create_chat_prompt():
+    template = """GUIDELINES FOR TALKING TO {reader_name}:
+    - You are chatting with an 8-year-old about {book_title}.
+    - Use the information from the context, like themes, character analysis, creative_prompt, moral_dilemma,and reading guidance
+    - Use the other information from the context, like empathy_prompt, real_world_connection and challenge
+    - If you don't know the answer, say: "I’m not sure, but maybe we can figure it out together!"
+    - Keep your answers short, easy to understand, and fun!
+    - After answering, ask a curious and fun question about the story to keep the conversation going.
+
+    Context: {context}
+    Chat History: {chat_history}
+    Current Question: {question}
+
+    HOW TO RESPOND:
+    - Use {reader_name}'s name in your answer, but no need to start with "Hi" or "Hello."
+    - Answer in 1-2 sentences.
+    - Follow up with a simple and exciting question about the story or characters.
+    - If you're talking about a theme or character, mention the cool details from the book.
+    - Help {reader_name} connect ideas to the story when you can.
+
+    Answer: """
+    return ChatPromptTemplate.from_template(template)
+
+def create_chat_prompt_to_be_improved():
+    template = """CRITICAL CONTEXT GUIDELINES:
+    - You are talking to an 8-year-old about {book_title}
+    - Use information from the context, including themes, character analysis, and reading guidance
+    - If unsure, say: "I don't know that from the book."
+    - Be concise and child-friendly
+    - After the answer, ask an engaging follow-up question related to the themes or characters
+
+    Context: {context}
+    Chat History: {chat_history}
+    Current Question: {question}
+
+    RESPONSE RULES:
+    - Include {reader_name}'s name but never start with a greeting
+    - Maximum 2 sentences for the answer
+    - Ask a simple follow-up question that encourages critical thinking
+    - If discussing a theme or character, reference the specific analysis provided
+    - Make connections to the book's themes when relevant
+
+    Answer: """
+    return ChatPromptTemplate.from_template(template)
+
+def create_chat_prompt_old():
     template = """CRITICAL CONTEXT GUIDELINES:
     - You are talking to an 8-year-old about a specific book
     - ONLY use information DIRECTLY from the provided context
@@ -217,6 +307,7 @@ def create_rag(uploaded_file):
 
         # Capture session state values at creation time
         current_reader_name = st.session_state.get('reader_name', 'Lucy')
+        current_book_title = st.session_state.get('book_title', 'the book')
 
         # Process documents
         doc_splits = process_document(uploaded_file, chunk_size, chunk_overlap)
@@ -286,14 +377,11 @@ def create_rag(uploaded_file):
         model_local = ChatOllama(
             model="llama3.2",
             base_url="http://localhost:11434",
-            temperature=0.0,
+            temperature=st.session_state.temperature,
             num_predict=150,
             top_k=10,
             top_p=0.1,
         )
-
-        def format_docs(docs):
-            return "\n\n".join(doc.page_content for doc in docs)
 
         # Modified RAG chain using captured vectorstore
         rag_chain = (
@@ -308,7 +396,8 @@ def create_rag(uploaded_file):
                     x.get("chat_history", []) if isinstance(x, dict) else []
                 ),
                 "question": lambda x: x["question"] if isinstance(x, dict) else x,
-                "reader_name": lambda x: current_reader_name
+                "reader_name": lambda x: current_reader_name,
+                "book_title": lambda x: current_book_title  # Add book_title to the chain
             }
             | create_chat_prompt()
             | model_local
@@ -320,7 +409,10 @@ def create_rag(uploaded_file):
         st.session_state.rag_created = True
 
         # Generate welcome message with an interesting fact
-        welcome_prompt = f"Tell me an interesting fact from this book that would excite an 8-year-old reader."
+        # welcome_prompt = f"Tell me an interesting fact from this book that would excite an 8-year-old reader."
+        # welcome_prompt = f"Hi there! You're about to dive into a story full of surprises. What do you think makes a great adventure?"
+        welcome_prompt = f"Hi there! You're about to dive into a story full of surprises. What do you think makes a great adventure?"
+
         welcome_response = rag_chain.invoke({
             "question": welcome_prompt,
             "chat_history": [],
@@ -329,6 +421,9 @@ def create_rag(uploaded_file):
 
         # Store welcome message in chat history
         st.session_state.chat_history.append({"role": "assistant", "content": welcome_response})
+        print(welcome_response)
+        with st.chat_message("assistant"):
+            st.markdown(welcome_response)
 
         return rag_chain
 
@@ -437,6 +532,7 @@ def crunchPrompt(prompt: str, debug: bool = True):
     with st.chat_message("user"):
         st.markdown(prompt)
 
+
     with st.chat_message("assistant"):
         with st.spinner('Thinking...'):
             try:
@@ -448,10 +544,11 @@ def crunchPrompt(prompt: str, debug: bool = True):
                     debug=debug
                 )
 
-                # Generate response
+                # Generate response with book_title
                 response = st.session_state.rag_chain.invoke({
                     "question": prompt,
-                    "chat_history": st.session_state.chat_history
+                    "chat_history": st.session_state.chat_history,
+                    "book_title": st.session_state.book_title  # Add book_title here
                 })
 
                 # Verify response
@@ -461,20 +558,67 @@ def crunchPrompt(prompt: str, debug: bool = True):
                 if verification["rag_confidence"] < 0.4:
                     st.warning("⚠️ This response might not be fully grounded in the document context.")
 
+
                 st.markdown(response)
                 st.session_state.chat_history.append({"role": "assistant", "content": response})
 
                 if st.session_state.tts_enabled:
-                    tts.play(response)
+                    st.session_state.tts.play(response)
 
             except Exception as e:
                 st.error(f"Error processing question: {str(e)}")
+
+def cleanup_chroma():
+    """Clean up ChromaDB resources."""
+    if st.session_state.vectorstore is not None:
+        try:
+            st.session_state.vectorstore._client.reset()
+            st.session_state.vectorstore._client = None
+        except:
+            pass
 
 # Streamlit UI
 if st.session_state.book_title:
     st.title(f"📚 {st.session_state.book_title} 🎯")
 else:
     st.title("📚")
+
+transcriber = DeepgramTranscriber()
+
+# Streamlit Session State
+if "listening" not in st.session_state:
+    st.session_state.listening = False
+if "transcription" not in st.session_state:
+    st.session_state.transcription = ""
+
+# Synchronous wrapper for Streamlit
+def listen_and_transcribe_sync():
+    """Run the async function in a blocking way for Streamlit."""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    return loop.run_until_complete(transcriber.listen_and_transcribe())
+
+# Start listening and transcribing
+if st.button("Start Listening"):
+    if not st.session_state.listening:
+        st.session_state.listening = True
+        st.write("Listening...")
+        transcription = listen_and_transcribe_sync()
+        st.session_state.transcription = f"\n{transcription}"
+        st.session_state.listening = False
+        st.write("Done listening.")
+
+# Stop listening
+if st.button("Stop Listening"):
+    if st.session_state.listening:
+        st.session_state.listening = False
+        st.session_state.transcription += "\nStopped listening."
+
+if st.session_state.transcription:
+    crunchPrompt(st.session_state.transcription, debug=True)
+
+st.write("Transcription:")
+st.text_area("Captured Text", st.session_state.transcription, height=100)
 
 # Sidebar
 with st.sidebar:
@@ -484,13 +628,13 @@ with st.sidebar:
         help="Enter the name of the reader"
     )
 
-    if prompt := st.button("Use Microphone"):
-        if st.session_state.rag_chain is None:
-            st.error("Please upload a document and create RAG system first!")
-        else:
-            st.write("Listening... please speak now...")
-            prompt = listen(stop_keyword="full stop")
-            crunchPrompt(prompt, debug=True)
+    # if prompt := st.button("Use Microphone"):
+    #     if st.session_state.rag_chain is None:
+    #         st.error("Please upload a document and create RAG system first!")
+    #     else:
+    #         st.write("Listening... please speak now...")
+    #         # prompt = listen(stop_keyword="full stop")
+    #         crunchPrompt(prompt, debug=True)
 
     st.markdown("### Speech Settings")
     if st.checkbox(
@@ -499,7 +643,7 @@ with st.sidebar:
         key="tts_toggle",
         help="Turn text-to-speech on/off"
     ):
-        tts = TextToSpeech()
+        st.session_state.tts = TextToSpeech()
     st.session_state.tts_enabled = st.session_state.tts_toggle
 
     if st.session_state.rag_created:
@@ -522,11 +666,14 @@ with st.sidebar:
                         rag_chain = create_rag(uploaded_file)
 
                         # Display the welcome message right after creation
-                        if st.session_state.chat_history:
-                            with st.chat_message("assistant"):
-                                st.markdown(st.session_state.chat_history[-1]["content"])
-                                if st.session_state.tts_enabled:
-                                    tts.play(st.session_state.chat_history[-1]["content"])
+                        # if st.session_state.chat_history:
+                        #     print('######')
+                        #     print(st.session_state.chat_history)
+                        #     print('######')
+                        #     with st.chat_message("user"):
+                        #         st.markdown(st.session_state.chat_history[-1]["content"])
+                        #     if st.session_state.tts_enabled:
+                        #         tts.play(st.session_state.chat_history[-1]["content"])
 
                         st.rerun()
 
@@ -535,6 +682,22 @@ with st.sidebar:
                         st.session_state.vectorstore = None
                         st.session_state.rag_chain = None
                         st.session_state.rag_created = False
+
+    # Clear database button
+    if st.button('Clear Database'):
+        if os.path.exists(PERSIST_DIR):
+            import shutil
+            shutil.rmtree(PERSIST_DIR)
+            os.makedirs(PERSIST_DIR)
+        cleanup_chroma()
+        st.success('Database cleared!')
+
+if not st.session_state.welcome_message_delivered:
+    if st.session_state.chat_history:
+        st.markdown(st.session_state.chat_history[-1]["content"])
+        if st.session_state.tts_enabled:
+            st.session_state.tts.play(st.session_state.chat_history[-1]["content"])
+        st.session_state.welcome_message_delivered = True
 
 if prompt := st.chat_input("Ask a question"):
     if st.session_state.rag_chain is None:
