@@ -5,7 +5,6 @@ from langchain_community.vectorstores import Chroma
 from langchain_ollama import ChatOllama, OllamaEmbeddings
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import ChatPromptTemplate
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import Docx2txtLoader
 import tempfile
@@ -22,6 +21,7 @@ from typing import List, Dict
 import numpy as np
 from langchain_core.documents import Document
 from sklearn.metrics.pairwise import cosine_similarity
+from prompts import create_system_prompt, create_dynamic_prompt
 import logging
 
 from enhanced_rag_content_processor import (
@@ -58,7 +58,7 @@ if 'vectorstore' not in st.session_state:
     st.session_state.vectorstore = None
 
 if 'temperature' not in st.session_state:
-    st.session_state.temperature = 0.2
+    st.session_state.temperature = 0.0
 
 if 'prompt_type' not in st.session_state:
     st.session_state.prompt_type = "SIMPLE"
@@ -86,6 +86,7 @@ if not os.path.exists(PERSIST_DIR):
 @st.cache_data
 def process_document(uploaded_file, chunk_size=800, chunk_overlap=100):
     """Process and split the uploaded document using enhanced content processor."""
+    print("Process and split file")
     print(f"Processing file: {uploaded_file.name} of type: {uploaded_file.type}")
 
     try:
@@ -113,65 +114,65 @@ def process_document(uploaded_file, chunk_size=800, chunk_overlap=100):
         print(f"Error processing document: {str(e)}")
         raise e
 
-@st.cache_data
-def process_document_old(uploaded_file, chunk_size=800, chunk_overlap=100):
-    """Process and split the uploaded document using RecursiveCharacterTextSplitter."""
-    print(f"Processing file: {uploaded_file.name} of type: {uploaded_file.type}")
-    print(f"Chunk size: {chunk_size}, chunk overlap: {chunk_overlap}")
+# @st.cache_data
+# def process_document_old(uploaded_file, chunk_size=800, chunk_overlap=100):
+#     """Process and split the uploaded document using RecursiveCharacterTextSplitter."""
+#     print(f"Processing file: {uploaded_file.name} of type: {uploaded_file.type}")
+#     print(f"Chunk size: {chunk_size}, chunk overlap: {chunk_overlap}")
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        temp_file_path = os.path.join(temp_dir, uploaded_file.name)
+#     with tempfile.TemporaryDirectory() as temp_dir:
+#         temp_file_path = os.path.join(temp_dir, uploaded_file.name)
 
-        with open(temp_file_path, 'wb') as f:
-            f.write(uploaded_file.getvalue())
+#         with open(temp_file_path, 'wb') as f:
+#             f.write(uploaded_file.getvalue())
 
-        try:
-            # Load document based on file type
-            if uploaded_file.type == "application/pdf":
-                loader = PyPDFLoader(temp_file_path)
-                docs = loader.load()
-                # Configure text splitter for narrative text
-                text_splitter = RecursiveCharacterTextSplitter(
-                    chunk_size=chunk_size,
-                    chunk_overlap=chunk_overlap,
-                    length_function=len,
-                    # Add separators specific to book content
-                    separators=["\n\n", "\n", ".", "!", "?", ",", " ", ""],
-                    # Keep sentences together where possible
-                    keep_separator=True
-                )
-                doc_splits = text_splitter.split_documents(docs)
+#         try:
+#             # Load document based on file type
+#             if uploaded_file.type == "application/pdf":
+#                 loader = PyPDFLoader(temp_file_path)
+#                 docs = loader.load()
+#                 # Configure text splitter for narrative text
+#                 text_splitter = RecursiveCharacterTextSplitter(
+#                     chunk_size=chunk_size,
+#                     chunk_overlap=chunk_overlap,
+#                     length_function=len,
+#                     # Add separators specific to book content
+#                     separators=["\n\n", "\n", ".", "!", "?", ",", " ", ""],
+#                     # Keep sentences together where possible
+#                     keep_separator=True
+#                 )
+#                 doc_splits = text_splitter.split_documents(docs)
 
-            elif uploaded_file.type in ["text/plain"]:
-                with open(temp_file_path, 'r') as f:
-                    text = f.read()
-                text_splitter = RecursiveCharacterTextSplitter(
-                    chunk_size=chunk_size,
-                    chunk_overlap=chunk_overlap,
-                    length_function=len,
-                    separators=["\n\n", "\n", ".", "!", "?", ",", " ", ""],
-                    keep_separator=True
-                )
-                doc_splits = text_splitter.create_documents([text])
+#             elif uploaded_file.type in ["text/plain"]:
+#                 with open(temp_file_path, 'r') as f:
+#                     text = f.read()
+#                 text_splitter = RecursiveCharacterTextSplitter(
+#                     chunk_size=chunk_size,
+#                     chunk_overlap=chunk_overlap,
+#                     length_function=len,
+#                     separators=["\n\n", "\n", ".", "!", "?", ",", " ", ""],
+#                     keep_separator=True
+#                 )
+#                 doc_splits = text_splitter.create_documents([text])
 
-            else:
-                raise ValueError(f"Unsupported file type: {uploaded_file.type}")
+#             else:
+#                 raise ValueError(f"Unsupported file type: {uploaded_file.type}")
 
-            # Add debug information
-            print(f"Document split into {len(doc_splits)} chunks")
-            print(f"Average chunk size: {sum(len(chunk.page_content) for chunk in doc_splits) / len(doc_splits):.0f} characters")
-            # Print a sample chunk for verification
-            if doc_splits:
-                print("\nSample chunk:")
-                print("-" * 50)
-                print(doc_splits[0].page_content[:200] + "...")
-                print("-" * 50)
+#             # Add debug information
+#             print(f"Document split into {len(doc_splits)} chunks")
+#             print(f"Average chunk size: {sum(len(chunk.page_content) for chunk in doc_splits) / len(doc_splits):.0f} characters")
+#             # Print a sample chunk for verification
+#             if doc_splits:
+#                 print("\nSample chunk:")
+#                 print("-" * 50)
+#                 print(doc_splits[0].page_content[:200] + "...")
+#                 print("-" * 50)
 
-            return doc_splits
+#             return doc_splits
 
-        except Exception as e:
-            print(f"Error processing document: {str(e)}")
-            raise e
+#         except Exception as e:
+#             print(f"Error processing document: {str(e)}")
+#             raise e
 
 @st.cache_resource
 def get_embeddings_model():
@@ -182,77 +183,7 @@ def get_embeddings_model():
     )
 
 # Enhanced prompt template with strict instructions
-# ADD STRICT RULES (check jailbreaks how claude or chatgpt does it) -> in the first attempt.
-def create_chat_prompt():
-    template = """GUIDELINES FOR TALKING TO {reader_name}:
-    - You are chatting with an 8-year-old about {book_title}.
-    - Use the information from the context, like themes, character analysis, creative_prompt, moral_dilemma,and reading guidance
-    - Use the other information from the context, like empathy_prompt, real_world_connection and challenge
-    - If you don't know the answer, say: "I’m not sure, but maybe we can figure it out together!"
-    - Keep your answers short, easy to understand, and fun!
-    - After answering, ask a curious and fun question about the story to keep the conversation going.
 
-    Context: {context}
-    Chat History: {chat_history}
-    Current Question: {question}
-
-    HOW TO RESPOND:
-    - Use {reader_name}'s name in your answer, but no need to start with "Hi" or "Hello."
-    - Answer in 1-2 sentences.
-    - Follow up with a simple and exciting question about the story or characters.
-    - If you're talking about a theme or character, mention the cool details from the book.
-    - Help {reader_name} connect ideas to the story when you can.
-
-    Answer: """
-    return ChatPromptTemplate.from_template(template)
-
-def create_chat_prompt_to_be_improved():
-    template = """CRITICAL CONTEXT GUIDELINES:
-    - You are talking to an 8-year-old about {book_title}
-    - Use information from the context, including themes, character analysis, and reading guidance
-    - If unsure, say: "I don't know that from the book."
-    - Be concise and child-friendly
-    - After the answer, ask an engaging follow-up question related to the themes or characters
-
-    Context: {context}
-    Chat History: {chat_history}
-    Current Question: {question}
-
-    RESPONSE RULES:
-    - Include {reader_name}'s name but never start with a greeting
-    - Maximum 2 sentences for the answer
-    - Ask a simple follow-up question that encourages critical thinking
-    - If discussing a theme or character, reference the specific analysis provided
-    - Make connections to the book's themes when relevant
-
-    Answer: """
-    return ChatPromptTemplate.from_template(template)
-
-def create_chat_prompt_old():
-    template = """CRITICAL CONTEXT GUIDELINES:
-    - You are talking to an 8-year-old about a specific book
-    - ONLY use information DIRECTLY from the provided context
-    - If a question CANNOT be answered using the context, respond: "I don't know that from the book."
-    - Be concise and child-friendly
-    - NEVER invent or guess information
-    - After the answer ask a follow-up question
-
-    Context: {context}
-
-    Chat History: {chat_history}
-
-    Current Question: {question}
-
-    RESPONSE RULES:
-    - Include the name of the kid {reader_name} in your response but NEVER start with "Hi {reader_name}" or any greeting
-    - Maximum 2 sentences for the answer
-    - After the answer ask a simple follow-up question
-    - If unsure, admit you don't know
-    - Do not use greetings or phrases like "Hey", "Hello", "Hi there"
-    - Get straight to answering the question
-
-    Answer: """
-    return ChatPromptTemplate.from_template(template)
 
 def cleanup_chroma():
     print("""Clean up ChromaDB resources.""")
@@ -277,12 +208,13 @@ def format_chat_history(chat_history, max_length=4):
     Returns:
     - Formatted string representation of chat history
     """
+    print('format_chat_history', chat_history)
     # If chat history is empty, return empty string
     if not chat_history:
         return ""
 
     # Limit to most recent messages
-    recent_history = chat_history[-max_length * 2:]
+    recent_history = chat_history # [-max_length * 2:]
 
     # Format history
     formatted_history = []
@@ -292,10 +224,11 @@ def format_chat_history(chat_history, max_length=4):
         content = message.get('content', '')
 
         # Truncate very long messages
-        if len(content) > 200:
-            content = content[:200] + "..."
+        # if len(content) > 200:
+        #     content = content[:200] + "..."
 
         formatted_history.append(f"{role}: {content}")
+        print('appending to formatted_history', f"{role}: {content}")
 
     # Join formatted messages
     return "\n".join(formatted_history)
@@ -383,6 +316,10 @@ def create_rag(uploaded_file):
             top_p=0.1,
         )
 
+        system_message = create_system_prompt(current_reader_name, current_book_title)
+        initial_chat_history = [{"role": "system", "content": system_message}]
+
+
         # Modified RAG chain using captured vectorstore
         rag_chain = (
             {
@@ -399,7 +336,7 @@ def create_rag(uploaded_file):
                 "reader_name": lambda x: current_reader_name,
                 "book_title": lambda x: current_book_title  # Add book_title to the chain
             }
-            | create_chat_prompt()
+            | create_dynamic_prompt()
             | model_local
             | StrOutputParser()
         )
@@ -411,17 +348,21 @@ def create_rag(uploaded_file):
         # Generate welcome message with an interesting fact
         # welcome_prompt = f"Tell me an interesting fact from this book that would excite an 8-year-old reader."
         # welcome_prompt = f"Hi there! You're about to dive into a story full of surprises. What do you think makes a great adventure?"
-        welcome_prompt = f"Hi there! You're about to dive into a story full of surprises. What do you think makes a great adventure?"
-
+        # welcome_prompt = f"Hi there! You're about to dive into a story full of surprises. What do you think makes a great adventure?"
+        welcome_prompt = f"""Hi there {current_reader_name}! I'm so excited to talk about {current_book_title} with you! I noticed something really special about the characters that made me want to know more. What was the first moment in the story that made you go "Wow!"?"""
+        print('WELCOME PROMPT', welcome_prompt)
         welcome_response = rag_chain.invoke({
             "question": welcome_prompt,
-            "chat_history": [],
+            "chat_history": initial_chat_history,
             "reader_name": current_reader_name
         })
 
+        print('WELCOME RESPONSE', welcome_response)
+
         # Store welcome message in chat history
+        st.session_state.chat_history.append({"role": "system", "content": system_message})
         st.session_state.chat_history.append({"role": "assistant", "content": welcome_response})
-        print(welcome_response)
+
         with st.chat_message("assistant"):
             st.markdown(welcome_response)
 
@@ -560,6 +501,8 @@ def crunchPrompt(prompt: str, debug: bool = True):
 
 
                 st.markdown(response)
+
+                # Add assistant message to chat history AFTER invoking the chain
                 st.session_state.chat_history.append({"role": "assistant", "content": response})
 
                 if st.session_state.tts_enabled:
@@ -567,15 +510,6 @@ def crunchPrompt(prompt: str, debug: bool = True):
 
             except Exception as e:
                 st.error(f"Error processing question: {str(e)}")
-
-def cleanup_chroma():
-    """Clean up ChromaDB resources."""
-    if st.session_state.vectorstore is not None:
-        try:
-            st.session_state.vectorstore._client.reset()
-            st.session_state.vectorstore._client = None
-        except:
-            pass
 
 # Streamlit UI
 if st.session_state.book_title:
@@ -590,6 +524,14 @@ if "listening" not in st.session_state:
     st.session_state.listening = False
 if "transcription" not in st.session_state:
     st.session_state.transcription = ""
+
+def clear_database():
+    if os.path.exists(PERSIST_DIR):
+        import shutil
+        shutil.rmtree(PERSIST_DIR)
+        os.makedirs(PERSIST_DIR)
+    cleanup_chroma()
+    print("Database cleared!")
 
 # Synchronous wrapper for Streamlit
 def listen_and_transcribe_sync():
@@ -685,11 +627,7 @@ with st.sidebar:
 
     # Clear database button
     if st.button('Clear Database'):
-        if os.path.exists(PERSIST_DIR):
-            import shutil
-            shutil.rmtree(PERSIST_DIR)
-            os.makedirs(PERSIST_DIR)
-        cleanup_chroma()
+        clear_database()
         st.success('Database cleared!')
 
 if not st.session_state.welcome_message_delivered:

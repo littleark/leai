@@ -1,7 +1,8 @@
-import json
+import re
+from typing import List, Dict
+import os
+import PyPDF2
 from dataclasses import dataclass
-from typing import List, Optional
-import yaml
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 
 @dataclass
@@ -98,18 +99,19 @@ def create_enhanced_rag_content(book_text: str, metadata: BookMetadata) -> List[
         documents.append(theme_doc)
 
     # 6. Process original book text with enhanced context
-    # chapters = split_into_chapters(book_text)
-    # for chapter_num, chapter_text in enumerate(chapters, 1):
-    #     chapter_doc = {
-    #         "content": chapter_text,
-    #         "type": "chapter_content",
-    #         "metadata": {
-    #             "chapter": chapter_num,
-    #             "section": "main_text"
-    #         }
-    #     }
-    #     documents.append(chapter_doc)
-    #
+    chapters = split_into_chapters(book_text)
+    for chapter_num, chapter_text in enumerate(chapters, 1):
+        chapter_doc = {
+            "content": chapter_text,
+            "type": "chapter_content",
+            "metadata": {
+                "chapter": chapter_num,
+                "section": "main_text"
+            }
+        }
+        print("appending chapter", chapter_num)
+        documents.append(chapter_doc)
+
 
     # templates that encourage kids to imagine alternative endings or write a new scene
     documents.append({
@@ -135,11 +137,11 @@ def create_enhanced_rag_content(book_text: str, metadata: BookMetadata) -> List[
         documents.append(char_doc)
 
     # background on the setting or the time period in which The Jungle Book was written
-    documents.append({
-        "content": f"Did you know that {metadata.title} is set in colonial India? What do you notice about how the animals and people interact? How do you think the time period influences the story?",
-        "type": "contextual_info",
-        "metadata": {"focus": "historical_context"}
-    })
+    # documents.append({
+    #     "content": f"Did you know that {metadata.title} is set in colonial India? What do you notice about how the animals and people interact? How do you think the time period influences the story?",
+    #     "type": "contextual_info",
+    #     "metadata": {"focus": "historical_context"}
+    # })
 
     # mini-challenges or quizzes for kids
     documents.append({
@@ -177,13 +179,42 @@ def create_enhanced_rag_content(book_text: str, metadata: BookMetadata) -> List[
         "metadata": {"focus": "vocabulary"}
     })
 
+    # documents.append({
+    #     "content": book_text,
+    #     "type": "book_content",
+    #     "metadata": {
+    #         "section": "main_text"
+    #     }
+    # })
+
     return documents
 
 def process_document_with_enhancements(uploaded_file, chunk_size=800, chunk_overlap=100):
     """Enhanced document processor with metadata and additional content"""
-    # Read the original book content
-    book_text = uploaded_file.getvalue().decode()
 
+    filename = uploaded_file.name
+
+    # Get the file extension
+    file_extension = os.path.splitext(filename)[1].lower()
+
+    # Read the original book content
+    # print("decoding file", filename, file_extension)
+    book_text = ""
+    try:
+        if(file_extension == ".pdf"):
+            with uploaded_file as pdf_file:
+                pdf_reader = PyPDF2.PdfReader(pdf_file)
+                book_text = pdf_reader.pages[0].extract_text()
+        else:
+            book_text = uploaded_file.getvalue().decode()
+    except Exception as e:
+        print(f"Error extracting text: {e}")
+
+    # book_text = uploaded_file.getvalue().decode()
+    # lines = book_text.split('\n')
+    # print("lines")
+    # print('\n'.join(lines[:5]))
+    # print("file decoded")
     # Extract or provide metadata (could be from a separate upload or UI input)
     # metadata = BookMetadata(
     #     title=extract_title(book_text),
@@ -193,28 +224,50 @@ def process_document_with_enhancements(uploaded_file, chunk_size=800, chunk_over
     #     main_characters=extract_characters(book_text),
     #     setting=extract_setting(book_text)
     # )
-
+    #
     metadata = BookMetadata(
-        title="The Jungle Book",
-        author= "Rudyard Kipling",
+        title="The midnight gang",
+        author= "David Walliams",
         reading_level= "Intermediate to Advanced",
         themes= [
-            "Nature and Wilderness",
-            "Identity and Belonging",
-            "Friendship and Loyalty",
-            "Survival and Adventure",
-            "Man vs. Nature"
+            "Friendship",
+            "Imagination and Dreams",
+            "Kindness and Compassion",
+            "Overcoming Adversity",
+            "Empathy"
         ],
         main_characters = [
-            "Mowgli",
-            "Baloo (the bear)",
-            "Bagheera (the black panther)",
-            "Shere Khan (the tiger)",
-            "Kaa (the python)",
-            "Akela (the wolf pack leader)",
-            "Rikki-Tikki-Tavi (the mongoose)"
+            "Tom: A young boy and the newest member of the Midnight Gang, who initially struggles to fit in but grows through the group's adventures",
+            "Amber:  A tough and determined girl in a wheelchair who is part of the gang",
+            "Robin: A clever and kind boy who is blind and a core member of the gang",
+            "George: A gentle giant of a boy with a big heart, also a key member of the gang",
+            "Sally: A very ill girl whose dream the gang is particularly focused on fulfilling",
+            "The Porter: A mysterious and grumpy hospital worker who has a deeper role in the children’s lives than they first expect",
+            "Matron: The strict and mean-spirited head of the children’s ward, providing much of the story's conflict"
         ],
-        setting = "The jungles of India during the late 19th century")
+        setting = "The story is primarily set in a London hospital, particularly in the children's ward and various other parts of the hospital the gang explores during their nighttime adventures. The setting is both mundane and magical, reflecting the balance between the real-life challenges the children face and the fantastical escapades they create together")
+
+    # metadata_JungleBook = BookMetadata(
+    #     title="The Jungle Book",
+    #     author= "Rudyard Kipling",
+    #     reading_level= "Intermediate to Advanced",
+    #     themes= [
+    #         "Nature and Wilderness",
+    #         "Identity and Belonging",
+    #         "Friendship and Loyalty",
+    #         "Survival and Adventure",
+    #         "Man vs. Nature"
+    #     ],
+    #     main_characters = [
+    #         "Mowgli",
+    #         "Baloo (the bear)",
+    #         "Bagheera (the black panther)",
+    #         "Shere Khan (the tiger)",
+    #         "Kaa (the python)",
+    #         "Akela (the wolf pack leader)",
+    #         "Rikki-Tikki-Tavi (the mongoose)"
+    #     ],
+    #     setting = "The jungles of India during the late 19th century")
 
     # Create enhanced content
     enhanced_docs = create_enhanced_rag_content(book_text, metadata)
@@ -239,10 +292,58 @@ def process_document_with_enhancements(uploaded_file, chunk_size=800, chunk_over
     return processed_docs
 
 # Helper functions (to be implemented based on your needs)
-# def split_into_chapters(text: str) -> List[str]:
-#     """Split book text into chapters"""
-#     # Implementation depends on book format
-#     pass
+import re
+from typing import List
+
+def split_into_chapters(text: str) -> List[str]:
+    """
+    Split a book text into chapters based on chapter headers.
+
+    Supports multiple chapter header formats:
+    - =>— CHAPTER 1 —>
+    - Chapter 1
+    - CHAPTER 1
+    - Chapter One
+    etc.
+
+    Args:
+        text (str): The full text of the book
+
+    Returns:
+        List[str]: A list of chapter texts
+    """
+    # Regex patterns to match various chapter header formats
+    chapter_patterns = [
+        r'(?:=>—\s*(?:CHAPTER|Chapter)\s*\d+\s*—>)',  # =>— CHAPTER 1 —>
+        r'(?:=>—\s*(?:CHAPTER|Chapter)\s*[A-Za-z]+\s*—>)',  # =>— CHAPTER ONE —>
+        r'(?:^|\n)(?:CHAPTER|Chapter)\s*\d+\b',  # Chapter 1 or CHAPTER 1
+        r'(?:^|\n)(?:CHAPTER|Chapter)\s*[A-Za-z]+\b',  # Chapter One or CHAPTER ONE
+    ]
+
+    # Combine patterns with case-insensitive flag
+    full_pattern = '|'.join(chapter_patterns)
+
+    # Find all chapter headers
+    chapter_headers = list(re.finditer(full_pattern, text, re.MULTILINE | re.IGNORECASE))
+
+    # If no chapters found, return the entire text as one chapter
+    if not chapter_headers:
+        return [text]
+
+    # Split the text into chapters
+    chapters = []
+    for i in range(len(chapter_headers)):
+        start = chapter_headers[i].start()
+
+        # If it's not the last chapter, use the next chapter's start as the end
+        if i + 1 < len(chapter_headers):
+            end = chapter_headers[i + 1].start()
+            chapters.append(text[start:end].strip())
+        else:
+            # For the last chapter, go to the end of the text
+            chapters.append(text[start:].strip())
+
+    return chapters
 
 # def extract_title(text: str) -> str:
 #     """Extract book title from text"""
