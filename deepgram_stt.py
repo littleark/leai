@@ -9,14 +9,15 @@ import numpy as np
 import pyaudio
 import websockets
 from dotenv import load_dotenv
-import threading
 import time
 
 load_dotenv()
 
+DEEPGRAM_API_KEY = os.environ.get("DEEPGRAM_API_KEY", None)
+
 class DeepgramTranscriber:
     def __init__(self):
-        self.api_key = os.getenv("DEEPGRAM_API_KEY")
+        self.api_key = DEEPGRAM_API_KEY
         if not self.api_key:
             raise ValueError("DEEPGRAM_API_KEY not found in environment variables")
 
@@ -44,6 +45,7 @@ class DeepgramTranscriber:
         extra_headers = {
             "Authorization": f"Token {self.api_key}",
         }
+        print(f"extra_headers: {extra_headers}")
 
         params = {
             "encoding": "linear16",
@@ -59,7 +61,7 @@ class DeepgramTranscriber:
         print(f"Connecting to URL: {url}")
 
         try:
-            self.websocket = await websockets.connect(url, extra_headers=extra_headers)
+            self.websocket = await websockets.connect(url, additional_headers=extra_headers)
         except Exception as e:
             print(f"Failed to connect to Deepgram: {e}")
             self.websocket = None

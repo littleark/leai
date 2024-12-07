@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 # from tts_utils import initialize_tts, play
 from deepgram_tts import TextToSpeech
 from deepgram_stt import DeepgramTranscriber
-from micro import listen
+# from micro import listen
 from typing import List, Dict
 import numpy as np
 from langchain_core.documents import Document

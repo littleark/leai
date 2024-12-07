@@ -25,7 +25,7 @@ from langchain_core.prompts import ChatPromptTemplate
 #     return ChatPromptTemplate.from_template(template)
 
 def create_system_prompt(reader_name, book_title):
-    return f"""You are a friendly, engaging book companion designed to discuss the book {book_title} with an 8-year-old reader named {reader_name}. Your goal is to:
+    return f"""You are a friendly, engaging book companion designed to discuss the book {book_title} with an 8-year-old reader named {reader_name}. You have to follow the following guidelines:
 
     1. Length Constraint:
     - CRITICAL: Limit ALL responses to MAXIMUM 2 LINES
