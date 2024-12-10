@@ -1,5 +1,8 @@
 <script>
-    import { onMount } from "svelte";
+    import { onMount, onDestroy } from "svelte";
+    import { AudioTranscriptionClient } from "./lib/AudioTranscriptionClient";
+
+    let transcriptionClient;
 
     let file;
     let readerName = "Lucy";
@@ -12,6 +15,10 @@
 
     onMount(async () => {
         audioContext = new (window.AudioContext || window.webkitAudioContext)();
+
+        transcriptionClient = new AudioTranscriptionClient(
+            "ws://localhost:8765",
+        );
     });
 
     async function handleFileUpload() {
@@ -84,26 +91,79 @@
     }
 
     async function toggleListening() {
-        isListening = !isListening;
+        if (!isListening) {
+            isListening = true;
+            await transcriptionClient.startTranscription();
 
-        if (isListening) {
-            try {
-                const response = await fetch(
-                    "http://localhost:8000/transcribe",
-                    {
-                        method: "POST",
-                    },
-                );
+            transcriptionClient.socket.onmessage = async (event) => {
+                const data = JSON.parse(event.data);
+                console.log("onmessage", data);
+                if (
+                    data.type === "final_transcript" &&
+                    data.is_final &&
+                    data.speech_final
+                ) {
+                    // Update the input field with the transcribed text
+                    userInput = data.transcript;
 
-                const data = await response.json();
-                userInput = data.transcription;
-                isListening = false;
-            } catch (error) {
-                console.error("Error transcribing:", error);
-                isListening = false;
-            }
+                    // Send the transcribed text to chat
+                    // try {
+                    //     const response = await fetch(
+                    //         "http://localhost:8000/chat",
+                    //         {
+                    //             method: "POST",
+                    //             headers: {
+                    //                 "Content-Type": "application/json",
+                    //             },
+                    //             body: JSON.stringify({
+                    //                 message: data.transcript,
+                    //                 reader_name: readerName,
+                    //             }),
+                    //         },
+                    //     );
+
+                    //     if (!response.ok) {
+                    //         throw new Error("Chat request failed");
+                    //     }
+
+                    //     const chatResponse = await response.json();
+                    //     messages = [
+                    //         ...messages,
+                    //         { role: "user", content: data.transcript },
+                    //         {
+                    //             role: "assistant",
+                    //             content: chatResponse.message,
+                    //         },
+                    //     ];
+
+                    //     if (chatResponse.audio) {
+                    //         playAudio(chatResponse.audio);
+                    //     }
+                    // } catch (error) {
+                    //     console.error("Error sending chat message:", error);
+                    // }
+
+                    // Stop listening after processing
+                    isListening = false;
+                    transcriptionClient.stopTranscription();
+
+                    sendMessage();
+                } else if (data.type === "interim_transcript") {
+                    // Show interim results while speaking
+                    userInput = data.transcript;
+                }
+            };
+        } else {
+            isListening = false;
+            transcriptionClient.stopTranscription();
         }
     }
+
+    onDestroy(() => {
+        if (transcriptionClient) {
+            transcriptionClient.stopTranscription();
+        }
+    });
 
     async function initializeAudioContext() {
         console.log("initializeAudioContext");
@@ -115,61 +175,44 @@
 
     // Modify your existing playAudio function
     async function playAudio(audioData) {
-        console.log("playAudio", audioData?.length);
-        if (!audioData) return;
+        if (!audioData || !Array.isArray(audioData)) {
+            console.log("No valid audio data received");
+            return;
+        }
 
         try {
             await initializeAudioContext();
 
-            const sampleRate = 48000;
-            const rawSamples = audioData; // Now directly an array of integers
-
-            // Create the audio buffer
+            // Create audio buffer
             const audioBuffer = audioContext.createBuffer(
-                1, // Number of channels
-                rawSamples.length, // Number of samples
-                sampleRate, // Sample rate
+                1, // mono
+                audioData.length,
+                48000, // sample rate
             );
 
-            // Get channel data
+            // Get the channel data
             const channelData = audioBuffer.getChannelData(0);
 
-            // Fill the buffer
-            for (let i = 0; i < rawSamples.length; i++) {
+            // Fill the buffer with normalized audio data
+            for (let i = 0; i < audioData.length; i++) {
                 // Normalize from int16 (-32768 to 32767) to float32 (-1.0 to 1.0)
-                channelData[i] = rawSamples[i] / 32768.0;
+                channelData[i] = audioData[i] / 32768.0;
             }
 
-            // Create and configure source
+            // Create audio source
             const source = audioContext.createBufferSource();
             source.buffer = audioBuffer;
-
-            // Create gain node
-            const gainNode = audioContext.createGain();
-            gainNode.gain.value = 1.0;
-
-            // Connect the nodes
-            source.connect(gainNode);
-            gainNode.connect(audioContext.destination);
-
-            // Start playing
+            source.connect(audioContext.destination);
             source.start(0);
 
-            // Debug logging
-            console.log("Audio details:", {
-                sampleCount: rawSamples.length,
-                duration: audioBuffer.duration,
+            // For debugging
+            console.log("Playing audio:", {
+                length: audioData.length,
                 sampleRate: audioBuffer.sampleRate,
-                maxSample: Math.max(...rawSamples),
-                minSample: Math.min(...rawSamples),
+                duration: audioBuffer.duration,
             });
-
-            return source;
         } catch (error) {
-            console.error("Error playing audio:", error, {
-                audioContextState: audioContext?.state,
-                dataLength: audioData?.length,
-            });
+            console.error("Error playing audio:", error);
         }
     }
 </script>

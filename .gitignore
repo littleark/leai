@@ -11,3 +11,6 @@ htmlcov
 *.log
 venv
 .env
+
+audio
+*.wav

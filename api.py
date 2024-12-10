@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 import uuid
@@ -7,13 +7,14 @@ from pydantic import BaseModel
 from typing import Optional, List, Dict
 import asyncio
 import os
+import io
 import tempfile
 from chromadb.config import Settings
 from langchain_community.vectorstores import Chroma
 from langchain_ollama import ChatOllama, OllamaEmbeddings
 from langchain_core.output_parsers import StrOutputParser
 from deepgram_tts import text_to_speech_buffer
-from deepgram_stt import DeepgramTranscriber
+import json
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 from prompts import create_system_prompt, create_dynamic_prompt
@@ -21,11 +22,14 @@ from enhanced_rag_content_processor import process_document_with_enhancements
 import shutil
 import threading
 
+
 AUDIO_DIR = os.path.join(os.path.dirname(__file__), 'audio')
 if not os.path.exists(AUDIO_DIR):
     os.makedirs(AUDIO_DIR, exist_ok=True)
 
 db_lock = threading.Lock()
+
+audio_transcription_server = None
 
 app = FastAPI()
 
@@ -47,7 +51,7 @@ class RAGState:
         self.book_title = None
         self.reader_name = "Lucy"
         # self.tts = AsyncTextToSpeech()
-        self.transcriber = DeepgramTranscriber()
+        # self.transcriber = DeepgramTranscriber()
         self.temperature = 0.0
 
 # Initialize global state
@@ -379,13 +383,28 @@ async def chat(request: ChatRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/transcribe")
-async def transcribe_audio():
-    try:
-        transcription = await state.transcriber.listen_and_transcribe()
-        return {"transcription": transcription}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+# @app.post("/transcribe")
+# async def transcribe_audio(audio: UploadFile = File(...)):
+#     try:
+#         # Read the uploaded audio file
+#         audio_data = await audio.read()
+
+#         # Create new Deepgram transcriber instance for this request
+#         transcriber = DeepgramTranscriber()
+
+#         # Send the audio data directly to Deepgram
+#         transcription = await transcriber.transcribe_audio_data(audio_data)
+
+#         return {"transcription": transcription}
+#     except Exception as e:
+#         print(f"Transcription error: {str(e)}")
+#         raise HTTPException(status_code=500, detail=str(e))
+
+#     try:
+#         transcription = await state.transcriber.listen_and_transcribe()
+#         return {"transcription": transcription}
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/chat-history")
 async def get_chat_history():
@@ -403,4 +422,4 @@ async def clear_database():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8000, ws_max_size=1024*1024)

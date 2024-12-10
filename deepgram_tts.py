@@ -195,7 +195,8 @@ def text_to_speech_buffer(text_input):
     try:
         socket = connect(
             DEFAULT_URL,
-            additional_headers={"Authorization": f"Token {DEFAULT_TOKEN}"}
+            additional_headers={"Authorization": f"Token {DEFAULT_TOKEN}"},
+            close_timeout=1
         )
 
         # Handle both single strings and lists of strings
@@ -229,8 +230,13 @@ def text_to_speech_buffer(text_input):
                     print("Received flush signal, stream complete")
                     # Close the connection immediately after receiving Flushed message
                     if socket:
-                        socket.close()
-                        socket = None
+                        print('closing socket')
+                        try:
+                            socket.close()
+                            socket = None
+                            print("Closed socket")
+                        except Exception as e:
+                            print(f"Error closing socket: {e}")
                     break
             elif isinstance(message, bytes) and got_metadata:
                 print(f"Received audio chunk: {len(message)} bytes")
@@ -242,7 +248,12 @@ def text_to_speech_buffer(text_input):
 
     finally:
         if socket:
-            socket.close()
+            if socket:
+                print("if socket -> socket.close()")
+                try:
+                    socket.close()
+                except Exception as e:
+                    print(f"Error closing socket in finally block: {e}")
 
     final_audio = bytes(audio_buffer)
     print(f"Total audio length: {len(final_audio)} bytes")
@@ -250,7 +261,7 @@ def text_to_speech_buffer(text_input):
 
 def main():
     # Test with a single string
-    single_text = "The sun had just begun to rise over the sleepy town of Millfield."
+    single_text = "The sun"
     audio_data = text_to_speech_buffer(single_text)
 
     if audio_data and len(audio_data) > 0:
