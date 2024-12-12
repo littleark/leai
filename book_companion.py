@@ -1,3 +1,5 @@
+# This is part of the first exeperiments to validate the RAG system. Based on streamlit.
+
 import streamlit as st
 import asyncio
 from langchain_community.document_loaders import PyPDFLoader, TextLoader

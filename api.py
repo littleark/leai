@@ -385,28 +385,6 @@ async def chat(request: ChatRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# @app.post("/transcribe")
-# async def transcribe_audio(audio: UploadFile = File(...)):
-#     try:
-#         # Read the uploaded audio file
-#         audio_data = await audio.read()
-
-#         # Create new Deepgram transcriber instance for this request
-#         transcriber = DeepgramTranscriber()
-
-#         # Send the audio data directly to Deepgram
-#         transcription = await transcriber.transcribe_audio_data(audio_data)
-
-#         return {"transcription": transcription}
-#     except Exception as e:
-#         print(f"Transcription error: {str(e)}")
-#         raise HTTPException(status_code=500, detail=str(e))
-
-#     try:
-#         transcription = await state.transcriber.listen_and_transcribe()
-#         return {"transcription": transcription}
-#     except Exception as e:
-#         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/chat-history")
 async def get_chat_history():
