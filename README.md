@@ -1,4 +1,5 @@
 # Book Companion AI
+## Created by Vasundhara Parakh
 An intelligent AI system that helps readers engage with books through interactive conversations, audio interactions, and enhanced content analysis.
 
 ## 🌟 Features
