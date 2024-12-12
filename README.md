@@ -73,3 +73,22 @@ Create a `.env` file with the following variables:
 ```
 DEEPGRAM_API_KEY=your_key_here
 ```
+
+## 🎨 UI Setup
+
+Navigate to the UI directory and install dependencies:
+```bash
+cd ui/
+npm install
+```
+
+Start the development server:
+```bash
+npm run dev
+```
+
+The UI provides:
+- Interactive chat interface
+- Audio recording and playback
+- Book content visualization
+- Real-time conversation updates
