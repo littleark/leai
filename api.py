@@ -267,11 +267,13 @@ async def upload_document(file: UploadFile = File(...), reader_name: str = "Lucy
 
         # Generate welcome message
         welcome_prompt = f"""Hi there {reader_name}! I'm so excited to talk about {state.book_title} with you!"""
+        # welcome_prompt = f"""My name is {reader_name}! I'm so excited to talk about {state.book_title} with you! Let's start talking about one (and only one) of the most important themes of the book. Ask me anything!"""
         print('welcome_prompt', welcome_prompt)
         welcome_response = state.rag_chain.invoke({
             "question": welcome_prompt,
             "chat_history": state.chat_history,
-            "reader_name": reader_name
+            "reader_name": reader_name,
+            "book_title": state.book_title
         })
 
         print('addding welcome message to chat history')
