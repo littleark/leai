@@ -1,3 +1,4 @@
+python-multipart
 aiohttp==3.11.8
 chromadb==0.5.20
 deepgram_sdk==3.7.7
