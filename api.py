@@ -181,6 +181,10 @@ def create_custom_retriever(vectorstore, embedding_function):
 
     return custom_retriever
 
+@app.get("/")
+def api_home():
+    return {'detail': 'Welcome to Book Companion API'}
+
 @app.post("/upload")
 async def upload_document(file: UploadFile = File(...), reader_name: str = "Lucy"):
     try:
