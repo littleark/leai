@@ -22,6 +22,9 @@
         isLoading: true,
     };
 
+    // const URL = "https://littlebeez-book-companion.hf.space"
+    const URL = "http://localhost:7860";
+
     onMount(async () => {
         audioContext = new (window.AudioContext || window.webkitAudioContext)();
 
@@ -41,7 +44,7 @@
         formData.append("reader_name", readerName);
 
         try {
-            const response = await fetch("http://localhost:8000/upload", {
+            const response = await fetch(`${URL}/upload`, {
                 method: "POST",
                 body: formData,
             });
@@ -77,7 +80,7 @@
         messages = [...messages, loadingMessage];
 
         try {
-            const response = await fetch("http://localhost:8000/chat", {
+            const response = await fetch(`${URL}/chat`, {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
@@ -121,7 +124,7 @@
                     // Send the transcribed text to chat
                     // try {
                     //     const response = await fetch(
-                    //         "http://localhost:8000/chat",
+                    //         "http://localhost:7860/chat",
                     //         {
                     //             method: "POST",
                     //             headers: {

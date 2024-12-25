@@ -11,7 +11,8 @@ import io
 import tempfile
 from chromadb.config import Settings
 from langchain_community.vectorstores import Chroma
-from langchain_ollama import ChatOllama, OllamaEmbeddings
+from langchain_groq import ChatGroq
+from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_core.output_parsers import StrOutputParser
 from deepgram_tts import text_to_speech_buffer
 import json
@@ -21,6 +22,11 @@ from prompts import create_system_prompt, create_dynamic_prompt
 from enhanced_rag_content_processor import process_document_with_enhancements
 import shutil
 import threading
+from dotenv import load_dotenv
+
+load_dotenv()
+
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 
 AUDIO_DIR = os.path.join(os.path.dirname(__file__), 'audio')
@@ -93,9 +99,9 @@ def format_chat_history(chat_history: List[Dict], max_length: int = 4) -> str:
 
 def get_embeddings_model():
     """Initialize and return the embedding model."""
-    return OllamaEmbeddings(
-        model='nomic-embed-text',
-        base_url="http://localhost:11434"
+    return HuggingFaceEmbeddings(
+        model_name="all-MiniLM-L6-v2",
+        model_kwargs={'device': 'cpu'}
     )
 
 def cleanup_chroma():
@@ -232,12 +238,11 @@ async def upload_document(file: UploadFile = File(...), reader_name: str = "Lucy
 
         print('initializing LLM')
         # Initialize LLM
-        model_local = ChatOllama(
-            model="llama3.2",
-            base_url="http://localhost:11434",
+        model_local = ChatGroq(
             temperature=state.temperature,
-            num_predict=150,
-            top_k=10,
+            groq_api_key=GROQ_API_KEY,
+            model_name="llama-3.3-70b-versatile",  # or "mixtral-8x7b-32768" or other Groq models
+            max_tokens=150,
             top_p=0.1,
         )
 
