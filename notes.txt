@@ -1,0 +1,2 @@
+1. keep a history of opening sentences so that it doesn't repeat
+2. summarize the messages so that we can keep a shorter history

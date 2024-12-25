@@ -9,14 +9,15 @@ import numpy as np
 import pyaudio
 import websockets
 from dotenv import load_dotenv
-import threading
 import time
 
 load_dotenv()
 
+DEEPGRAM_API_KEY = os.environ.get("DEEPGRAM_API_KEY", None)
+
 class DeepgramTranscriber:
     def __init__(self):
-        self.api_key = os.getenv("DEEPGRAM_API_KEY")
+        self.api_key = DEEPGRAM_API_KEY
         if not self.api_key:
             raise ValueError("DEEPGRAM_API_KEY not found in environment variables")
 
@@ -44,6 +45,7 @@ class DeepgramTranscriber:
         extra_headers = {
             "Authorization": f"Token {self.api_key}",
         }
+        print(f"extra_headers: {extra_headers}")
 
         params = {
             "encoding": "linear16",
@@ -59,7 +61,7 @@ class DeepgramTranscriber:
         print(f"Connecting to URL: {url}")
 
         try:
-            self.websocket = await websockets.connect(url, extra_headers=extra_headers)
+            self.websocket = await websockets.connect(url, additional_headers=extra_headers)
         except Exception as e:
             print(f"Failed to connect to Deepgram: {e}")
             self.websocket = None
@@ -147,6 +149,50 @@ class DeepgramTranscriber:
         if self.websocket:
             await self.websocket.close()
 
+    async def transcribe_audio_data(self, audio_data):
+        """Transcribe pre-recorded audio data."""
+        try:
+            # Connect to Deepgram WebSocket with specific parameters
+            params = {
+                "encoding": "linear16",
+                "sample_rate": 16000,
+                "channels": 1,
+                "model": "general",
+                "language": "en",
+                "punctuate": "true",
+            }
+
+            url = f"{self.websocket_url}?{urlencode(params)}"
+
+            async with websockets.connect(
+                url,
+                additional_headers={"Authorization": f"Token {self.api_key}"}
+            ) as websocket:
+                # Send the audio data
+                await websocket.send(audio_data)
+
+                # Send end-of-stream message
+                await websocket.send(json.dumps({"type": "CloseStream"}))
+
+                # Collect transcription
+                transcription = []
+                try:
+                    while True:
+                        response = await websocket.recv()
+                        json_response = json.loads(response)
+                        if "channel" in json_response:
+                            transcript = json_response["channel"]["alternatives"][0]["transcript"]
+                            if transcript.strip():
+                                transcription.append(transcript)
+                except websockets.exceptions.ConnectionClosed:
+                    pass
+
+                return " ".join(transcription)
+
+        except Exception as e:
+            print(f"Error transcribing audio data: {e}")
+            return str(e)
+
 
 
 
@@ -225,7 +271,7 @@ class DeepgramTranscriberOld:
 
     async def connect_websocket(self):
         """Establish WebSocket connection with Deepgram"""
-        extra_headers = {
+        additional_headers = {
             "Authorization": f"Token {self.api_key}",
         }
 
@@ -243,7 +289,7 @@ class DeepgramTranscriberOld:
         print(f"Connecting to URL: {url}")
 
         try:
-            self.websocket = await websockets.connect(url, extra_headers=extra_headers)
+            self.websocket = await websockets.connect(url, additional_headers=extra_headers)
         except Exception as e:
             print(f"Failed to connect to Deepgram: {e}")
             self.websocket = None

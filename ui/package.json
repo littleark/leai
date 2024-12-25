@@ -1,0 +1,21 @@
+{
+  "name": "book_companion",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^5.0.0",
+    "daisyui": "^4.12.20",
+    "svelte": "^5.2.7",
+    "vite": "^6.0.1"
+  },
+  "dependencies": {
+    "extendable-media-recorder": "^9.2.17",
+    "extendable-media-recorder-wav-encoder": "^7.0.121"
+  }
+}
