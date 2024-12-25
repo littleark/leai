@@ -72,6 +72,7 @@ Retrieve conversation history and previous interactions.
 Create a `.env` file with the following variables:
 ```
 DEEPGRAM_API_KEY=your_key_here
+GROQ_API_KEY=your_key_here
 ```
 
 ## 🎨 UI Setup
