@@ -1,5 +1,6 @@
 FROM python:3.13
 # RUN apt-get update && apt-get install
+COPY ./packages.txt .
 RUN xargs -a packages.txt apt-get install -y
 
 RUN useradd -m -u 1000 user
