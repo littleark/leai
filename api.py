@@ -60,6 +60,7 @@ state = RAGState()
 # Create a persistent directory for the database
 PERSIST_DIR = os.path.join(tempfile.gettempdir(), 'book_companion_db')
 if not os.path.exists(PERSIST_DIR):
+    print("creating persist directory", PERSIST_DIR)
     os.makedirs(PERSIST_DIR, mode=0o777)
 
 CHROMA_SETTINGS = Settings(
