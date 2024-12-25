@@ -4,7 +4,7 @@ import streamlit as st
 import asyncio
 from langchain_community.document_loaders import PyPDFLoader, TextLoader
 from langchain_community.vectorstores import Chroma
-from langchain_ollama import ChatOllama, OllamaEmbeddings
+from groq import GroqModel, GroqEmbeddings
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
 from langchain.text_splitter import RecursiveCharacterTextSplitter
@@ -39,7 +39,7 @@ from enhanced_rag_content_processor import (
 
 load_dotenv()
 
-# elevenlabs_api_key = os.getenv("ELEVENLABS_API_KEY")
+groq_api_key = os.getenv("GROQ_API_KEY")
 
 MAX_HISTORY_LENGTH = 4
 
@@ -116,72 +116,13 @@ def process_document(uploaded_file, chunk_size=800, chunk_overlap=100):
         print(f"Error processing document: {str(e)}")
         raise e
 
-# @st.cache_data
-# def process_document_old(uploaded_file, chunk_size=800, chunk_overlap=100):
-#     """Process and split the uploaded document using RecursiveCharacterTextSplitter."""
-#     print(f"Processing file: {uploaded_file.name} of type: {uploaded_file.type}")
-#     print(f"Chunk size: {chunk_size}, chunk overlap: {chunk_overlap}")
-
-#     with tempfile.TemporaryDirectory() as temp_dir:
-#         temp_file_path = os.path.join(temp_dir, uploaded_file.name)
-
-#         with open(temp_file_path, 'wb') as f:
-#             f.write(uploaded_file.getvalue())
-
-#         try:
-#             # Load document based on file type
-#             if uploaded_file.type == "application/pdf":
-#                 loader = PyPDFLoader(temp_file_path)
-#                 docs = loader.load()
-#                 # Configure text splitter for narrative text
-#                 text_splitter = RecursiveCharacterTextSplitter(
-#                     chunk_size=chunk_size,
-#                     chunk_overlap=chunk_overlap,
-#                     length_function=len,
-#                     # Add separators specific to book content
-#                     separators=["\n\n", "\n", ".", "!", "?", ",", " ", ""],
-#                     # Keep sentences together where possible
-#                     keep_separator=True
-#                 )
-#                 doc_splits = text_splitter.split_documents(docs)
-
-#             elif uploaded_file.type in ["text/plain"]:
-#                 with open(temp_file_path, 'r') as f:
-#                     text = f.read()
-#                 text_splitter = RecursiveCharacterTextSplitter(
-#                     chunk_size=chunk_size,
-#                     chunk_overlap=chunk_overlap,
-#                     length_function=len,
-#                     separators=["\n\n", "\n", ".", "!", "?", ",", " ", ""],
-#                     keep_separator=True
-#                 )
-#                 doc_splits = text_splitter.create_documents([text])
-
-#             else:
-#                 raise ValueError(f"Unsupported file type: {uploaded_file.type}")
-
-#             # Add debug information
-#             print(f"Document split into {len(doc_splits)} chunks")
-#             print(f"Average chunk size: {sum(len(chunk.page_content) for chunk in doc_splits) / len(doc_splits):.0f} characters")
-#             # Print a sample chunk for verification
-#             if doc_splits:
-#                 print("\nSample chunk:")
-#                 print("-" * 50)
-#                 print(doc_splits[0].page_content[:200] + "...")
-#                 print("-" * 50)
-
-#             return doc_splits
-
-#         except Exception as e:
-#             print(f"Error processing document: {str(e)}")
-#             raise e
-
 @st.cache_resource
 def get_embeddings_model():
     """Initialize and return the embedding model."""
-    return OllamaEmbeddings(
+    return GroqEmbeddings(
         model='nomic-embed-text',
-        base_url="http://localhost:11434"
+        base_url="http://localhost:11434",
+        api_key=groq_api_key
     )
 
 # Enhanced prompt template with strict instructions
@@ -309,13 +250,14 @@ def create_rag(uploaded_file):
             return filtered_docs
 
         # Get LLM model
-        model_local = ChatOllama(
+        model_local = GroqModel(
             model="llama3.2",
             base_url="http://localhost:11434",
             temperature=st.session_state.temperature,
             num_predict=150,
             top_k=10,
             top_p=0.1,
+            api_key=groq_api_key
         )
 
         system_message = create_system_prompt(current_reader_name, current_book_title)
