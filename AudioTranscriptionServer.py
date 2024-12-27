@@ -56,18 +56,53 @@ class AudioTranscriptionServer:
             # Create Deepgram WebSocket connection
             self.dg_connection = deepgram.listen.websocket.v("1")
 
-            # ... (rest of the setup code remains the same)
+            async def wrapped_on_message(*args, **kwargs):
+                try:
+                    await self.on_message(*args, **kwargs)
+                except Exception as e:
+                    print(f"Error in wrapped_on_message: {e}")
+
+            # Setup Deepgram event handlers
+            self.dg_connection.on(LiveTranscriptionEvents.Open, self.on_open)
+            self.dg_connection.on(LiveTranscriptionEvents.Transcript,
+                lambda *args, **kwargs: self.loop.create_task(wrapped_on_message(*args, **kwargs)))
+            self.dg_connection.on(LiveTranscriptionEvents.Metadata, self.on_metadata)
+            self.dg_connection.on(LiveTranscriptionEvents.Error, self.on_error)
+            self.dg_connection.on(LiveTranscriptionEvents.Close, self.on_close)
+            self.dg_connection.on(LiveTranscriptionEvents.SpeechStarted, self.on_speech_started)
+            self.dg_connection.on(LiveTranscriptionEvents.UtteranceEnd, self.on_utterance_end)
+            self.dg_connection.on(LiveTranscriptionEvents.Unhandled, self.on_unhandled)
+
+            options: LiveOptions = LiveOptions(
+                model="nova-2",
+                language="en-US",
+                smart_format=True,
+                encoding="linear16",
+                channels=self.audio_config['channels'],
+                sample_rate=self.audio_config['rate'],
+                interim_results=True,
+                utterance_end_ms="1000",
+                vad_events=True,
+                endpointing=300,
+            )
+
+            addons = {
+                "no_delay": "true"
+            }
+
+            # Start Deepgram connection
+            if not self.dg_connection.start(options, addons=addons):
+                self.logger.error("Failed to start Deepgram connection")
+                return
 
             try:
                 while True:
                     try:
                         message = await websocket.receive_bytes()
+                        print(f"Received audio chunk of size: {len(message)}")  # Debug print
                         self.dg_connection.send(message)
                     except WebSocketDisconnect:
                         self.logger.info("Client disconnected normally")
-                        break
-                    except ConnectionClosed:
-                        self.logger.info("WebSocket connection closed")
                         break
                     except Exception as e:
                         self.logger.error(f"Error receiving message: {str(e)}")

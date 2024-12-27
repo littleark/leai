@@ -11,6 +11,7 @@ import io
 import tempfile
 import sys
 from pathlib import Path
+import subprocess
 
 from chromadb.config import Settings
 from chromadb import Client
@@ -77,26 +78,6 @@ state = RAGState()
 # Create a persistent directory for the database
 HOME = str(Path.home())
 PERSIST_DIR = os.path.join(HOME, '.book_companion_db')
-def ensure_directory_permissions():
-    """Ensure the persistence directory exists and has correct permissions"""
-    try:
-        # Create parent directory if it doesn't exist
-        os.makedirs(PERSIST_DIR, exist_ok=True)
-
-        # Set permissions for the directory
-        os.chmod(PERSIST_DIR, 0o777)
-
-        # Set permissions for all existing contents
-        for root, dirs, files in os.walk(PERSIST_DIR):
-            for d in dirs:
-                os.chmod(os.path.join(root, d), 0o777)
-            for f in files:
-                os.chmod(os.path.join(root, f), 0o777)
-    except Exception as e:
-        print(f"Error setting directory permissions: {e}")
-
-# Call this function at startup
-ensure_directory_permissions()
 
 CHROMA_SETTINGS = Settings(
     persist_directory=PERSIST_DIR,
@@ -143,21 +124,18 @@ def cleanup_chroma():
     """Clean up ChromaDB resources."""
     with db_lock:
         try:
+            # Reset state
             if state.vectorstore is not None:
-                try:
-                    # Attempt to reset the client
-                    state.vectorstore._client.reset()
-                except Exception as e:
-                    print(f"Error resetting client: {e}")
-                # Clear the vectorstore reference
                 state.vectorstore = None
 
-            # Ensure the directory exists with proper permissions
-            ensure_directory_permissions()
+            # Reinitialize the database directory
+            initialize_database()
 
         except Exception as e:
             print(f"Error during ChromaDB cleanup: {e}")
+        finally:
             state.vectorstore = None
+            state.current_collection = None
 
 def process_document(file_content: bytes, filename: str) -> List:
     """Process and split the uploaded document."""
@@ -308,14 +286,21 @@ def load_book_collection(collection_name: str):
 def api_home():
     return {'detail': 'Welcome to Book Companion API'}
 
+def get_chroma_client():
+    """Get a fresh ChromaDB client with proper settings"""
+    initialize_database()  # Ensure directory exists with proper permissions
+    return Client(Settings(
+        persist_directory=PERSIST_DIR,
+        anonymized_telemetry=False,
+        allow_reset=True,
+        is_persistent=True
+    ))
+
 @app.post("/upload")
 async def upload_document(file: UploadFile = File(...), reader_name: str = "Lucy"):
     try:
         # Clean up existing ChromaDB and state
-        cleanup_chroma()
-
-        # Ensure directory permissions
-        ensure_directory_permissions()
+        initialize_database()
 
         state.chat_history = []
         state.rag_chain = None
@@ -360,30 +345,23 @@ async def upload_document(file: UploadFile = File(...), reader_name: str = "Lucy
 
         try:
             # First attempt with standard initialization
+            client = get_chroma_client()
+            print("Created ChromaDB client")
             state.vectorstore = Chroma.from_documents(
                 documents=doc_splits,
                 embedding=embedding_function,
                 collection_name=collection_name,
                 collection_metadata={"hnsw:space": "cosine"},
-                client_settings=CHROMA_SETTINGS,
+                client=client,
             )
+            print("Created vectorstore successfully")
         except Exception as e:
-            print(f"First attempt at creating vectorstore failed: {e}")
-            try:
-                # Second attempt with explicit client creation
-                client = Client(CHROMA_SETTINGS)
-                state.vectorstore = Chroma.from_documents(
-                    documents=doc_splits,
-                    embedding=embedding_function,
-                    collection_name=collection_name,
-                    collection_metadata={"hnsw:space": "cosine"},
-                    client=client,
-                )
-            except Exception as e2:
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Error creating vector store: {str(e2)}"
-                )
+            print(f"Error creating vectorstore: {e}")
+            subprocess.run(['ls', '-la', PERSIST_DIR], check=True)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error creating vector store: {str(e)}"
+            )
 
         try:
             print('saving book metadata', state.book_title, file.filename, collection_name)
@@ -564,13 +542,15 @@ async def get_chat_history():
 
 @app.post("/clear")
 async def clear_database():
-    with db_lock:
-        try:
-            cleanup_chroma()
-            state.chat_history = []
-            return {"status": "success", "message": "Database cleared"}
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
+    """Clear all collections and reset the database"""
+    try:
+        cleanup_chroma()
+        state.chat_history = []
+        state.book_title = None
+        return {"status": "success", "message": "Database cleared"}
+    except Exception as e:
+        print(f"Error clearing database: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -670,18 +650,89 @@ async def load_book(collection_name: str, reader_name: str = "Lucy"):
 
         state.chat_history.append({"role": "assistant", "content": welcome_response})
 
-        return {
-            "status": "success",
-            "book_title": state.book_title,
-            "welcome_message": welcome_response
-        }
+        # Generate audio for welcome message
+        print('generating audio for welcome message')
+        audio_data = text_to_speech_buffer(welcome_response)
+
+        if audio_data:
+            # Generate unique filename
+            audio_filename = f"{uuid.uuid4()}.wav"
+            audio_path = os.path.join(AUDIO_DIR, audio_filename)
+
+            # Save audio file
+            with wave.open(audio_path, 'wb') as wave_file:
+                wave_file.setnchannels(1)  # mono
+                wave_file.setsampwidth(2)  # 2 bytes per sample (16-bit)
+                wave_file.setframerate(48000)  # sample rate
+                wave_file.writeframes(audio_data)
+
+            audio_array = np.frombuffer(audio_data, dtype=np.int16)
+            audio_list = audio_array.tolist()
+
+            return {
+                "status": "success",
+                "book_title": state.book_title,
+                "welcome_message": welcome_response,
+                "audio_url": f"/audio/{audio_filename}",
+                "audio": audio_list
+            }
+        else:
+            return {
+                "status": "success",
+                "book_title": state.book_title,
+                "welcome_message": welcome_response,
+                "audio_url": None,
+                "audio": None
+            }
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+def initialize_database():
+    """Initialize the database directory with correct permissions"""
+    try:
+        # Create base directory if it doesn't exist
+        os.makedirs(PERSIST_DIR, exist_ok=True)
+
+        # Set permissions for the entire directory tree
+        subprocess.run(['chmod', '-R', '777', PERSIST_DIR], check=True)
+
+        print(f"Initialized database directory: {PERSIST_DIR}")
+        # Print current permissions for debugging
+        subprocess.run(['ls', '-la', PERSIST_DIR], check=True)
+
+    except Exception as e:
+        print(f"Error initializing database: {e}")
+        raise e
+
+async def verify_database_state():
+    """Verify the database state and log available books"""
+    try:
+        books = await list_books()
+        print(f"Found {len(books.get('books', []))} books in database")
+        for book in books.get('books', []):
+            print(f"  - {book['title']}")
+    except Exception as e:
+        print(f"Error verifying database state: {e}")
+
+@app.get("/debug")
+async def debug_permissions():
+    try:
+        subprocess.run(['ls', '-la', PERSIST_DIR], check=True)
+        subprocess.run(['whoami'], check=True)
+        return {"message": "Debug info printed to logs"}
+    except Exception as e:
+        return {"error": str(e)}
+
 @app.on_event("startup")
 async def startup_event():
-    ensure_directory_permissions()
+    try:
+        print("Initializing database on startup...")
+        initialize_database()
+        await verify_database_state()
+    except Exception as e:
+        print(f"Error during startup: {e}")
+
 
 if __name__ == "__main__":
     import uvicorn
