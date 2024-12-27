@@ -242,9 +242,11 @@ async def upload_document(file: UploadFile = File(...), reader_name: str = "Lucy
         model_local = ChatGroq(
             temperature=state.temperature,
             groq_api_key=GROQ_API_KEY,
-            model_name="llama-3.3-70b-versatile",  # or "mixtral-8x7b-32768" or other Groq models
+            model_name="llama-3.3-70b-versatile",
             max_tokens=150,
-            top_p=0.1,
+            model_kwargs={
+                "top_p": 0.1
+            }
         )
 
         print('creating system message')

@@ -22,14 +22,15 @@
         isLoading: true,
     };
 
-    // const URL = "https://littlebeez-book-companion.hf.space";
-    const URL = "http://localhost:7860";
+    const URL = "https://littlebeez-book-companion.hf.space";
+    // const URL = "http://localhost:7860";
 
     onMount(async () => {
         audioContext = new (window.AudioContext || window.webkitAudioContext)();
 
         transcriptionClient = new AudioTranscriptionClient(
-            `wss://localhost:7860/ws`,
+            // `ws://localhost:7860/ws`,
+            `wss://littlebeez-book-companion.hf.space/ws`,
         );
     });
 
