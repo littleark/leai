@@ -98,18 +98,20 @@ class AudioTranscriptionServer:
             try:
                 while True:
                     try:
-                        message = await websocket.receive_bytes()
-                        print(f"Received audio chunk of size: {len(message)}")  # Debug print
-                        self.dg_connection.send(message)
+                        data = await websocket.receive()
+                        if data.get("type") == "websocket.receive":
+                            if "bytes" in data:
+                                audio_data = data["bytes"]
+                                print(f"Received audio chunk of size: {len(audio_data)}")
+                                self.dg_connection.send(audio_data)
                     except WebSocketDisconnect:
                         self.logger.info("Client disconnected normally")
                         break
                     except Exception as e:
                         self.logger.error(f"Error receiving message: {str(e)}")
                         break
-
             except Exception as e:
-                self.logger.error(f"Error in WebSocket message loop: {str(e)}")
+                self.logger.error(f"Error in message loop: {str(e)}")
 
         except Exception as e:
             self.logger.error(f"Error in WebSocket handling: {str(e)}")
