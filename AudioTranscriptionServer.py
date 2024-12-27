@@ -29,7 +29,7 @@ class AudioTranscriptionServer:
 
         self.loop = asyncio.get_event_loop()
 
-        self.chat_api_url = "http://localhost:8000/chat"
+        self.chat_api_url = "http://localhost:7860/chat"
 
         self.is_finals = []
 
