@@ -20,3 +20,4 @@ websockets
 python-multipart
 sentence-transformers
 langchain-huggingface>=0.0.5
+langchain-chroma>=0.0.5
