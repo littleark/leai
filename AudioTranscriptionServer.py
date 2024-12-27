@@ -1,5 +1,5 @@
 import asyncio
-import websockets
+from fastapi import WebSocket
 from deepgram import (
     DeepgramClient,
     LiveTranscriptionEvents,
@@ -9,7 +9,7 @@ import os
 import logging
 import uuid
 import wave
-import pyaudio;
+import pyaudio
 import aiohttp
 import json
 
@@ -40,23 +40,17 @@ class AudioTranscriptionServer:
         self.audio_save_dir = audio_save_dir
         os.makedirs(self.audio_save_dir, exist_ok=True)
 
-    async def start_server(self, host='localhost', port=8765):
-        """Start WebSocket server to receive audio and forward to Deepgram"""
-        server = await websockets.serve(
-            self.handle_client_websocket,
-            host,
-            port
-        )
-        self.logger.info(f"WebSocket server started on ws://{host}:{port}")
-        await server.wait_closed()
+        self.current_websocket = None
+        self.dg_connection = None
 
-    async def handle_client_websocket(self, websocket, path):
-        """Handle incoming WebSocket connection from client"""
-
+    async def handle_fastapi_websocket(self, websocket: WebSocket):
+        """Handle WebSocket connection using FastAPI's WebSocket"""
+        await websocket.accept()
         self.current_websocket = websocket
 
         try:
             # Initialize Deepgram client
+            print("Initializing Deepgram client")
             deepgram = DeepgramClient(self.deepgram_api_key)
 
             # Create Deepgram WebSocket connection
@@ -68,11 +62,10 @@ class AudioTranscriptionServer:
                 except Exception as e:
                     print(f"Error in wrapped_on_message: {e}")
 
-
             # Setup Deepgram event handlers
             self.dg_connection.on(LiveTranscriptionEvents.Open, self.on_open)
-            # self.dg_connection.on(LiveTranscriptionEvents.Transcript, self.on_message)
-            self.dg_connection.on(LiveTranscriptionEvents.Transcript, lambda *args, **kwargs: self.loop.create_task(wrapped_on_message(*args, **kwargs)))
+            self.dg_connection.on(LiveTranscriptionEvents.Transcript,
+                lambda *args, **kwargs: self.loop.create_task(wrapped_on_message(*args, **kwargs)))
             self.dg_connection.on(LiveTranscriptionEvents.Metadata, self.on_metadata)
             self.dg_connection.on(LiveTranscriptionEvents.Error, self.on_error)
             self.dg_connection.on(LiveTranscriptionEvents.Close, self.on_close)
@@ -102,45 +95,23 @@ class AudioTranscriptionServer:
                 self.logger.error("Failed to start Deepgram connection")
                 return
 
-            # Forward audio from client to Deepgram
             try:
-                chunk_count = 0
-                async for message in websocket:
-                    # Generate a unique filename for each audio chunk
-                    # chunk_count += 1
-                    # filename = os.path.join(
-                    #     self.audio_save_dir,
-                    #     f'audio_chunk_{chunk_count}_{uuid.uuid4().hex}.wav'
-                    # )
-
-                    # # Save the audio chunk as a proper WAV file
-                    # try:
-                    #     # save_wav_chunk(message, filename)
-                    #     with wave.open(filename, 'wb') as wav_file:
-                    #         # Set wav file parameters
-                    #         wav_file.setnchannels(self.audio_config["channels"])  # mono
-                    #         wav_file.setsampwidth(pyaudio.get_sample_size(self.audio_config["format"]))  # 16-bit
-                    #         wav_file.setframerate(self.audio_config["rate"])  # 16kHz
-                    #         wav_file.writeframes(message)
-
-                    #     # self.logger.info(f"Saved audio chunk to {filename}")
-                    # except Exception as save_error:
-                    #     self.logger.error(f"Error saving audio chunk: {save_error}")
-
-                    # Send the message to Deepgram
-                    # print(f"Sending message to Deepgram: {len(message)}")
+                while True:
+                    message = await websocket.receive_bytes()
                     self.dg_connection.send(message)
 
-            except websockets.exceptions.ConnectionClosed:
-                self.logger.info("Client WebSocket connection closed")
-
-            finally:
-                # Finish Deepgram connection
-                self.current_websocket = None
-                self.dg_connection.finish()
+            except Exception as e:
+                self.logger.error(f"Error processing WebSocket message: {e}")
 
         except Exception as e:
             self.logger.error(f"Error in WebSocket handling: {e}")
+            import traceback
+            traceback.print_exc()
+
+        finally:
+            if self.dg_connection:
+                self.dg_connection.finish()
+            self.current_websocket = None
 
     def on_open(self, open_event=None, connection=None, **kwargs):
         print(f"Connection Open: {open_event}")
@@ -148,10 +119,6 @@ class AudioTranscriptionServer:
 
     def on_close(self, close_event=None, connection=None, **kwargs):
         print("Connection Closed")
-        # self.concatenate_wav_files(
-        #     audio_save_dir,
-        #     os.path.join(audio_save_dir, 'full_recording.wav')
-        # )
 
     def on_metadata(self, client=None, metadata=None, **kwargs):
         print(f"Metadata: {metadata}")
@@ -198,17 +165,14 @@ class AudioTranscriptionServer:
                 if result.speech_final:
                     utterance = " ".join(self.is_finals)
                     print(f"Speech Final: {utterance}")
-                    # Send the final utterance back to the browser
-                    # chat_response = await self.send_to_chat(utterance)
 
-                    # Send both transcription and chat response to client
                     if self.current_websocket:
-                        await self.current_websocket.send(json.dumps({
+                        await self.current_websocket.send_json({
                             "type": "final_transcript",
                             "transcript": utterance,
                             "is_final": True,
                             "speech_final": True
-                        }))
+                        })
 
                     self.is_finals = []
                     self.dg_connection.finish()
@@ -217,10 +181,10 @@ class AudioTranscriptionServer:
             else:
                 print(f"Interim Results: {sentence}")
                 if self.current_websocket:
-                    await self.current_websocket.send(json.dumps({
+                    await self.current_websocket.send_json({
                         "type": "interim_transcript",
                         "transcript": sentence
-                    }))
+                    })
 
         except Exception as e:
             print(f"Error in on_message: {e}")
@@ -236,38 +200,6 @@ class AudioTranscriptionServer:
             ) as response:
                 return await response.json()
 
-    def concatenate_wav_files(self, input_dir, output_file):
-        """
-        Concatenate all WAV files in a directory into a single WAV file.
-
-        Args:
-            input_dir (str): Directory containing WAV files to concatenate
-            output_file (str): Path to the output concatenated WAV file
-        """
-        # Get list of WAV files, sorted by creation time
-        wav_files = [f for f in os.listdir(input_dir) if f.endswith('.wav')]
-        wav_files.sort(key=lambda x: os.path.getctime(os.path.join(input_dir, x)))
-
-        if not wav_files:
-            print("No WAV files found to concatenate.")
-            return
-
-        # Read the first file to get parameters
-        with wave.open(os.path.join(input_dir, wav_files[0]), 'rb') as first_wav:
-            params = first_wav.getparams()
-
-        # Open output file
-        with wave.open(output_file, 'wb') as outfile:
-            outfile.setparams(params)
-
-            # Append frames from each input file
-            for wav_file in wav_files:
-                filepath = os.path.join(input_dir, wav_file)
-                with wave.open(filepath, 'rb') as w:
-                    outfile.writeframes(w.readframes(w.getnframes()))
-
-        print(f"Concatenated {len(wav_files)} WAV files into {output_file}")
-
     def save_wav_chunk(self, message, filename, channels=1, sample_width=2, sample_rate=44100):
         with wave.open(filename, 'wb') as wav_file:
             wav_file.setnchannels(channels)
@@ -280,15 +212,17 @@ async def main():
         # Create and start the audio transcription server
         transcription_server = AudioTranscriptionServer()
 
-        # Create an event loop and run the server
-        server = await websockets.serve(
-            transcription_server.handle_client_websocket,
-            'localhost',
-            8765
-        )
+        await transcription_server.start_server()
 
-        print(f"WebSocket server started on ws://localhost:8765")
-        await server.wait_closed()
+        # Create an event loop and run the server
+        # server = await websockets.serve(
+        #     transcription_server.handle_client_websocket,
+        #     'localhost',
+        #     8765
+        # )
+
+        # print(f"WebSocket server started on ws://localhost:8765")
+        # await server.wait_closed()
 
     except Exception as e:
         print(f"Error starting server: {e}")

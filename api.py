@@ -23,6 +23,7 @@ from enhanced_rag_content_processor import process_document_with_enhancements
 import shutil
 import threading
 from dotenv import load_dotenv
+from AudioTranscriptionServer import AudioTranscriptionServer
 
 load_dotenv()
 
@@ -409,6 +410,12 @@ async def clear_database():
             return {"status": "success", "message": "Database cleared"}
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    print("websocket endpoint")
+    transcription_server = AudioTranscriptionServer()
+    await transcription_server.handle_fastapi_websocket(websocket)
 
 if __name__ == "__main__":
     import uvicorn
