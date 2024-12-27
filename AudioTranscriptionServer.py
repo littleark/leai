@@ -1,5 +1,5 @@
 import asyncio
-from fastapi import WebSocket
+from fastapi import WebSocket, WebSocketDisconnect
 from deepgram import (
     DeepgramClient,
     LiveTranscriptionEvents,
