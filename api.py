@@ -12,7 +12,7 @@ import tempfile
 from chromadb.config import Settings
 from langchain_community.vectorstores import Chroma
 from langchain_groq import ChatGroq
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_core.output_parsers import StrOutputParser
 from deepgram_tts import text_to_speech_buffer
 import json
@@ -24,6 +24,8 @@ import shutil
 import threading
 from dotenv import load_dotenv
 from AudioTranscriptionServer import AudioTranscriptionServer
+
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 load_dotenv()
 
@@ -208,30 +210,47 @@ async def upload_document(file: UploadFile = File(...), reader_name: str = "Lucy
             os.makedirs(PERSIST_DIR, mode=0o777)
 
         # Read file content
-        file_content = await file.read()
+        try:
+            file_content = await file.read()
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Error reading file: {str(e)}")
 
-        # Process document
-        doc_splits = process_document(file_content, file.filename)
+        try:
+            doc_splits = process_document(file_content, file.filename)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Error processing document: {str(e)}")
+
+        if not doc_splits:
+            raise HTTPException(status_code=400, detail="No content could be extracted from the document")
 
         # Get book title
-        state.book_title = doc_splits[0].page_content.split('\n')[0].strip()
-        state.reader_name = reader_name
+        try:
+            state.book_title = doc_splits[0].page_content.split('\n')[0].strip()
+            state.reader_name = reader_name
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Error extracting book title: {str(e)}")
 
         print('book title', state.book_title)
         print('reader name', state.reader_name)
 
         print('initializing embedding model')
         # Initialize embedding model
-        embedding_function = get_embeddings_model()
+        try:
+            embedding_function = get_embeddings_model()
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Error initializing embedding model: {str(e)}")
 
         print('creating vectorstore')
         # Create vectorstore
-        state.vectorstore = Chroma.from_documents(
-            documents=doc_splits,
-            embedding=embedding_function,
-            collection_metadata={"hnsw:space": "cosine"},
-            client_settings=CHROMA_SETTINGS
-        )
+        try:
+            state.vectorstore = Chroma.from_documents(
+                documents=doc_splits,
+                embedding=embedding_function,
+                collection_metadata={"hnsw:space": "cosine"},
+                client_settings=CHROMA_SETTINGS
+            )
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Error creating vector store: {str(e)}")
 
         print('custom retriever')
         # Create custom retriever
@@ -332,11 +351,16 @@ async def upload_document(file: UploadFile = File(...), reader_name: str = "Lucy
                 "audio": None
             }
 
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
     except Exception as e:
-        print(f"Upload error: {str(e)}")
+        print(f"Unexpected error in upload: {str(e)}")
+        import traceback
+        traceback.print_exc()
         # Clean up in case of error
         cleanup_chroma()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 @app.post("/chat")
 async def chat(request: ChatRequest):
@@ -415,9 +439,18 @@ async def clear_database():
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    print("websocket endpoint")
+    print("New WebSocket connection attempt")
     transcription_server = AudioTranscriptionServer()
-    await transcription_server.handle_fastapi_websocket(websocket)
+    try:
+        await transcription_server.handle_fastapi_websocket(websocket)
+    except WebSocketDisconnect:
+        print("Client disconnected normally")
+    except Exception as e:
+        print(f"WebSocket error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        print("WebSocket connection closed")
 
 if __name__ == "__main__":
     import uvicorn

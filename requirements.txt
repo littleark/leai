@@ -19,3 +19,4 @@ uvicorn
 websockets
 python-multipart
 sentence-transformers
+langchain-huggingface>=0.0.5
