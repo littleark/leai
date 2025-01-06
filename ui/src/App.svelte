@@ -28,15 +28,15 @@
         isLoading: true,
     };
 
-    // const URL = "https://littlebeez-book-companion.hf.space";
-    const URL = "http://localhost:7860";
+    const URL = "https://littlebeez-book-companion.hf.space";
+    // const URL = "http://localhost:7860";
 
     onMount(async () => {
         audioContext = new (window.AudioContext || window.webkitAudioContext)();
 
         transcriptionClient = new AudioTranscriptionClient(
-            `ws://localhost:7860/ws`,
-            // `wss://littlebeez-book-companion.hf.space/ws`,
+            // `ws://localhost:7860/ws`,
+            `wss://littlebeez-book-companion.hf.space/ws`,
         );
 
         await fetchAvailableBooks();
@@ -158,27 +158,97 @@
 
     async function toggleListening() {
         if (!isListening) {
-            console.log("Starting transcription...");
             isListening = true;
             await transcriptionClient.startTranscription();
 
-            transcriptionClient.socket.onopen = () => {
-                console.log("WebSocket connected");
-            };
-
-            transcriptionClient.socket.onerror = (error) => {
-                console.error("WebSocket error:", error);
-            };
-
-            transcriptionClient.socket.onclose = () => {
-                console.log("WebSocket closed");
-            };
-
             transcriptionClient.socket.onmessage = async (event) => {
                 const data = JSON.parse(event.data);
-                console.log("Received transcription:", data);
-                // ... rest of your onmessage handler
+                console.log("onmessage", data);
+                if (
+                    data.type === "final_transcript" &&
+                    data.is_final &&
+                    data.speech_final
+                ) {
+                    // Update the input field with the transcribed text
+                    userInput = data.transcript;
+
+                    // Send the transcribed text to chat
+                    // try {
+                    //     const response = await fetch(
+                    //         "http://localhost:8000/chat",
+                    //         {
+                    //             method: "POST",
+                    //             headers: {
+                    //                 "Content-Type": "application/json",
+                    //             },
+                    //             body: JSON.stringify({
+                    //                 message: data.transcript,
+                    //                 reader_name: readerName,
+                    //             }),
+                    //         },
+                    //     );
+
+                    //     if (!response.ok) {
+                    //         throw new Error("Chat request failed");
+                    //     }
+
+                    //     const chatResponse = await response.json();
+                    //     messages = [
+                    //         ...messages,
+                    //         { role: "user", content: data.transcript },
+                    //         {
+                    //             role: "assistant",
+                    //             content: chatResponse.message,
+                    //         },
+                    //     ];
+
+                    //     if (chatResponse.audio) {
+                    //         playAudio(chatResponse.audio);
+                    //     }
+                    // } catch (error) {
+                    //     console.error("Error sending chat message:", error);
+                    // }
+
+                    // Stop listening after processing
+                    isListening = false;
+                    transcriptionClient.stopTranscription();
+
+                    sendMessage();
+                } else if (data.type === "interim_transcript") {
+                    // Show interim results while speaking
+                    userInput = data.transcript;
+                }
             };
+        } else {
+            isListening = false;
+            transcriptionClient.stopTranscription();
+        }
+    }
+
+    async function toggleListening2() {
+        if (!isListening) {
+            console.log("Starting transcription...");
+            isListening = true;
+            console.log("STARTING TRANSCRIPTION");
+            await transcriptionClient.startTranscription();
+            console.log("STARTED TRANSCRIPTION");
+            // transcriptionClient.socket.onopen = () => {
+            //     console.log("WebSocket connected");
+            // };
+
+            // transcriptionClient.socket.onerror = (error) => {
+            //     console.error("WebSocket error:", error);
+            // };
+
+            // transcriptionClient.socket.onclose = () => {
+            //     console.log("WebSocket closed");
+            // };
+
+            // transcriptionClient.socket.onmessage = async (event) => {
+            //     const data = JSON.parse(event.data);
+            //     console.log("Received transcription:", data);
+            //     // ... rest of your onmessage handler
+            // };
         } else {
             console.log("Stopping transcription...");
             isListening = false;

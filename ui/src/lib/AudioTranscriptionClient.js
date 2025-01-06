@@ -52,7 +52,16 @@ export class AudioTranscriptionClient {
 
   async startRecording() {
     try {
-      this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+      this.stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 2,
+          sampleRate: 44100,
+          echoCancellation: true,
+          noiseSuppression: true,
+        }
+      });
 
       const audioContext = new AudioContext({ sampleRate: 44100 });
       const mediaStreamAudioSourceNode = new MediaStreamAudioSourceNode(
