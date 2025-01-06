@@ -35,10 +35,9 @@ jobs:
         with:
           node-version: 20
           cache: "npm"
-      - name: Enter UI folder
-        run: cd ui
       - name: Install dependencies
         run: npm install
+        working-directory: ui
       - name: Build
         run: npm run build
       - name: Setup Pages
@@ -47,7 +46,7 @@ jobs:
         uses: actions/upload-pages-artifact@v2
         with:
           # Upload dist repository
-          path: "./dist"
+          path: "./ui/dist"
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v2
