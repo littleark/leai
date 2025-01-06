@@ -1,3 +1,4 @@
+# Simple workflow for deploying static content to GitHub Pages
 name: Deploy static content to Pages
 
 on:
@@ -30,11 +31,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
       - name: Set up Node
-        run: |
-          cd ui
-          npm install -g npm@latest
-        env:
-          NODE_VERSION: 20
+        uses: actions/setup-node@v3
+        with:
+          node-version: 20
+          cache: "npm"
       - name: Install dependencies
         run: npm install
         working-directory: ui
