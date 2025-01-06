@@ -13,6 +13,12 @@
     let audioContext;
     let audioInitialized = false;
 
+    let availableBooks = [];
+    let selectedBook = null;
+
+    $: console.log("availableBooks", availableBooks);
+    $: console.log("selectedBook", selectedBook);
+
     let showUploadModal = !bookTitle;
     let isUploading = false;
 
@@ -22,13 +28,61 @@
         isLoading: true,
     };
 
+    const URL = "https://littlebeez-book-companion.hf.space";
+    // const URL = "http://localhost:7860";
+
     onMount(async () => {
         audioContext = new (window.AudioContext || window.webkitAudioContext)();
 
         transcriptionClient = new AudioTranscriptionClient(
-            "ws://localhost:8765",
+            // `ws://localhost:7860/ws`,
+            `wss://littlebeez-book-companion.hf.space/ws`,
         );
+
+        await fetchAvailableBooks();
     });
+
+    async function fetchAvailableBooks() {
+        try {
+            const response = await fetch(`${URL}/books`);
+            const data = await response.json();
+            availableBooks = data.books || [];
+        } catch (error) {
+            console.error("Error fetching books:", error);
+        }
+    }
+
+    async function loadBook(collectionName) {
+        try {
+            const response = await fetch(
+                `${URL}/books/${collectionName}/load`,
+                {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                    },
+                    body: JSON.stringify({ reader_name: readerName }),
+                },
+            );
+
+            if (!response.ok) {
+                throw new Error("Failed to load book");
+            }
+
+            const data = await response.json();
+            bookTitle = data.book_title;
+            messages = [
+                ...messages,
+                { role: "assistant", content: data.welcome_message },
+            ];
+            if (data.audio) {
+                playAudio(data.audio);
+            }
+            showUploadModal = false;
+        } catch (error) {
+            console.error("Error loading book:", error);
+        }
+    }
 
     async function handleFileUpload() {
         if (!file || !file[0]) {
@@ -41,7 +95,7 @@
         formData.append("reader_name", readerName);
 
         try {
-            const response = await fetch("http://localhost:8000/upload", {
+            const response = await fetch(`${URL}/upload`, {
                 method: "POST",
                 body: formData,
             });
@@ -77,7 +131,7 @@
         messages = [...messages, loadingMessage];
 
         try {
-            const response = await fetch("http://localhost:8000/chat", {
+            const response = await fetch(`${URL}/chat`, {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
@@ -166,6 +220,37 @@
                 }
             };
         } else {
+            isListening = false;
+            transcriptionClient.stopTranscription();
+        }
+    }
+
+    async function toggleListening2() {
+        if (!isListening) {
+            console.log("Starting transcription...");
+            isListening = true;
+            console.log("STARTING TRANSCRIPTION");
+            await transcriptionClient.startTranscription();
+            console.log("STARTED TRANSCRIPTION");
+            // transcriptionClient.socket.onopen = () => {
+            //     console.log("WebSocket connected");
+            // };
+
+            // transcriptionClient.socket.onerror = (error) => {
+            //     console.error("WebSocket error:", error);
+            // };
+
+            // transcriptionClient.socket.onclose = () => {
+            //     console.log("WebSocket closed");
+            // };
+
+            // transcriptionClient.socket.onmessage = async (event) => {
+            //     const data = JSON.parse(event.data);
+            //     console.log("Received transcription:", data);
+            //     // ... rest of your onmessage handler
+            // };
+        } else {
+            console.log("Stopping transcription...");
             isListening = false;
             transcriptionClient.stopTranscription();
         }
@@ -279,10 +364,47 @@
                                 placeholder="Enter your name"
                             />
                         </div>
+
+                        <!-- Add this new section for book selection -->
+                        {#if availableBooks.length > 0}
+                            <div class="setup-item">
+                                <label for="book-select"
+                                    >Select an existing book</label
+                                >
+                                <select
+                                    id="book-select"
+                                    bind:value={selectedBook}
+                                    class="book-select"
+                                    on:change={() =>
+                                        console.log(
+                                            "Selected book:",
+                                            selectedBook,
+                                        )}
+                                >
+                                    <option value="">-- Select a book --</option
+                                    >
+                                    {#each availableBooks as book}
+                                        <option value={book.collection_name}>
+                                            {book.title}
+                                        </option>
+                                    {/each}
+                                </select>
+                                {#if selectedBook}
+                                    <button
+                                        class="load-btn"
+                                        on:click={() => loadBook(selectedBook)}
+                                    >
+                                        Load Selected Book
+                                    </button>
+                                {/if}
+                            </div>
+                            <div class="setup-item divider">
+                                <span>OR</span>
+                            </div>
+                        {/if}
+
                         <div class="setup-item">
-                            <label for="book-upload"
-                                >Choose a book to discuss</label
-                            >
+                            <label for="book-upload">Upload a new book</label>
                             <div class="file-upload">
                                 <input
                                     id="book-upload"
@@ -300,24 +422,28 @@
                             >
                                 Cancel
                             </button>
-                            <button
-                                class="upload-btn"
-                                on:click={async () => {
-                                    isUploading = true;
-                                    try {
-                                        await handleFileUpload();
-                                        showUploadModal = false;
-                                    } catch (error) {
-                                        console.error("Upload failed:", error);
-                                        // Optionally show error message to user
-                                    } finally {
-                                        isUploading = false;
-                                    }
-                                }}
-                                disabled={!file || !file[0]}
-                            >
-                                Start Reading Together
-                            </button>
+                            {#if file && file[0]}
+                                <button
+                                    class="upload-btn"
+                                    on:click={async () => {
+                                        isUploading = true;
+                                        try {
+                                            await handleFileUpload();
+                                            await fetchAvailableBooks(); // Refresh the book list
+                                            showUploadModal = false;
+                                        } catch (error) {
+                                            console.error(
+                                                "Upload failed:",
+                                                error,
+                                            );
+                                        } finally {
+                                            isUploading = false;
+                                        }
+                                    }}
+                                >
+                                    Start Reading Together
+                                </button>
+                            {/if}
                         </div>
                     </div>
                 {/if}
@@ -762,5 +888,43 @@
         40% {
             transform: translateY(-8px);
         }
+    }
+
+    .book-select {
+        width: 100%;
+        padding: 0.8rem;
+        border: 2px solid #bdc3c7;
+        border-radius: 8px;
+        font-size: 1rem;
+        margin-bottom: 0.5rem;
+        background: white;
+        color: #2c3e50; /* Add this for text color */
+    }
+
+    .load-btn {
+        width: 100%;
+        background: #3498db;
+        color: white;
+        margin-top: 0.5rem;
+    }
+
+    .divider {
+        display: flex;
+        align-items: center;
+        text-align: center;
+        margin: 1rem 0;
+    }
+
+    .divider::before,
+    .divider::after {
+        content: "";
+        flex: 1;
+        border-bottom: 1px solid #bdc3c7;
+    }
+
+    .divider span {
+        padding: 0 1rem;
+        color: #7f8c8d;
+        font-size: 0.9rem;
     }
 </style>

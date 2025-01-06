@@ -4,7 +4,7 @@ An intelligent AI system that helps readers engage with books through interactiv
 
 ## 🌟 Features
 - RAG-based book analysis and discussion
-- Text-to-Speech and Speech-to-Text capabilities
+- Text-to-Speech and Speech-to-Text capabilities with Deepgram
 - Enhanced content processing with themes, characters, and discussion topics
 - Real-time websocket communication for audio interactions
 - Interactive chat system with conversation history

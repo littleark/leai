@@ -9,9 +9,17 @@ import asyncio
 import os
 import io
 import tempfile
+import sys
+from pathlib import Path
+import subprocess
+
 from chromadb.config import Settings
-from langchain_community.vectorstores import Chroma
-from langchain_ollama import ChatOllama, OllamaEmbeddings
+from chromadb import Client
+from chromadb.utils import embedding_functions
+
+from langchain_chroma import Chroma
+from langchain_groq import ChatGroq
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_core.output_parsers import StrOutputParser
 from deepgram_tts import text_to_speech_buffer
 import json
@@ -21,6 +29,15 @@ from prompts import create_system_prompt, create_dynamic_prompt
 from enhanced_rag_content_processor import process_document_with_enhancements
 import shutil
 import threading
+from dotenv import load_dotenv
+from AudioTranscriptionServer import AudioTranscriptionServer
+from datetime import datetime
+
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+load_dotenv()
+
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 
 AUDIO_DIR = os.path.join(os.path.dirname(__file__), 'audio')
@@ -53,14 +70,14 @@ class RAGState:
         # self.tts = AsyncTextToSpeech()
         # self.transcriber = DeepgramTranscriber()
         self.temperature = 0.0
+        self.current_collection = None
 
 # Initialize global state
 state = RAGState()
 
 # Create a persistent directory for the database
-PERSIST_DIR = os.path.join(tempfile.gettempdir(), 'book_companion_db')
-if not os.path.exists(PERSIST_DIR):
-    os.makedirs(PERSIST_DIR, mode=0o777)
+HOME = str(Path.home())
+PERSIST_DIR = os.path.join(HOME, '.book_companion_db')
 
 CHROMA_SETTINGS = Settings(
     persist_directory=PERSIST_DIR,
@@ -68,6 +85,12 @@ CHROMA_SETTINGS = Settings(
     allow_reset=True,
     is_persistent=True
 )
+
+class Book(BaseModel):
+    title: str
+    filename: str
+    upload_date: datetime
+    collection_name: str
 
 class ChatMessage(BaseModel):
     role: str
@@ -92,29 +115,27 @@ def format_chat_history(chat_history: List[Dict], max_length: int = 4) -> str:
 
 def get_embeddings_model():
     """Initialize and return the embedding model."""
-    return OllamaEmbeddings(
-        model='nomic-embed-text',
-        base_url="http://localhost:11434"
+    return HuggingFaceEmbeddings(
+        model_name="all-MiniLM-L6-v2",
+        model_kwargs={'device': 'cpu'}
     )
 
 def cleanup_chroma():
     """Clean up ChromaDB resources."""
     with db_lock:
         try:
+            # Reset state
             if state.vectorstore is not None:
-                # Attempt to reset the client
-                state.vectorstore._client.reset()
-                # Clear the vectorstore reference
                 state.vectorstore = None
 
-            # Remove the persist directory
-            if os.path.exists(PERSIST_DIR):
-                shutil.rmtree(PERSIST_DIR)
-                os.makedirs(PERSIST_DIR)
+            # Reinitialize the database directory
+            initialize_database()
 
         except Exception as e:
             print(f"Error during ChromaDB cleanup: {e}")
+        finally:
             state.vectorstore = None
+            state.current_collection = None
 
 def process_document(file_content: bytes, filename: str) -> List:
     """Process and split the uploaded document."""
@@ -181,45 +202,175 @@ def create_custom_retriever(vectorstore, embedding_function):
 
     return custom_retriever
 
+def get_books_collection():
+    """Get or create the books metadata collection"""
+    try:
+        # Create ChromaDB client
+        client = Client(Settings(
+            persist_directory=PERSIST_DIR,
+            anonymized_telemetry=False,
+            allow_reset=True,
+            is_persistent=True
+        ))
+
+        # Get or create collection
+        collection = client.get_or_create_collection(
+            name="books_metadata",
+            embedding_function=embedding_functions.DefaultEmbeddingFunction()
+        )
+        return collection
+    except Exception as e:
+        print(f"Error getting books collection: {e}")
+        return None
+
+def save_book_metadata(title: str, filename: str, collection_name: str):
+    """Save book metadata to the books collection"""
+    book = Book(
+        title=title,
+        filename=filename,
+        upload_date=datetime.now(),
+        collection_name=collection_name
+    )
+
+    metadata = {
+        "title": book.title,
+        "filename": book.filename,
+        "upload_date": book.upload_date.isoformat(),
+        "collection_name": book.collection_name
+    }
+    print('metadata', metadata)
+
+    try:
+        collection = get_books_collection()
+        if collection:
+            collection.add(
+                documents=[book.title],
+                metadatas=[metadata],
+                ids=[collection_name]
+            )
+    except Exception as e:
+        print(f"Error adding book to collection: {e}")
+
+def get_available_books() -> List[Dict]:
+    """Get list of available books"""
+    collection = get_books_collection()
+    if not collection:
+        return []
+
+    try:
+        results = collection.get()
+        books = []
+        for i, metadata in enumerate(results['metadatas']):
+            if metadata:  # Check if metadata exists
+                books.append({
+                    "title": metadata["title"],
+                    "filename": metadata["filename"],
+                    "upload_date": metadata["upload_date"],
+                    "collection_name": metadata["collection_name"]
+                })
+        return books
+    except Exception as e:
+        print(f"Error getting books: {e}")
+        return []
+
+def load_book_collection(collection_name: str):
+    """Load a book's vector collection"""
+    embedding_function = get_embeddings_model()
+    return Chroma(
+        collection_name=collection_name,
+        embedding_function=embedding_function,
+        client_settings=CHROMA_SETTINGS
+    )
+
+@app.get("/")
+def api_home():
+    return {'detail': 'Welcome to Book Companion API'}
+
+def get_chroma_client():
+    """Get a fresh ChromaDB client with proper settings"""
+    initialize_database()  # Ensure directory exists with proper permissions
+    return Client(Settings(
+        persist_directory=PERSIST_DIR,
+        anonymized_telemetry=False,
+        allow_reset=True,
+        is_persistent=True
+    ))
+
 @app.post("/upload")
 async def upload_document(file: UploadFile = File(...), reader_name: str = "Lucy"):
     try:
         # Clean up existing ChromaDB and state
-        cleanup_chroma()
+        initialize_database()
 
         state.chat_history = []
         state.rag_chain = None
         state.book_title = None
 
-        # Ensure the persist directory exists and is writable
-        if not os.path.exists(PERSIST_DIR):
-            os.makedirs(PERSIST_DIR, mode=0o777)
-
         # Read file content
-        file_content = await file.read()
+        try:
+            file_content = await file.read()
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Error reading file: {str(e)}")
 
         # Process document
-        doc_splits = process_document(file_content, file.filename)
+        try:
+            doc_splits = process_document(file_content, file.filename)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Error processing document: {str(e)}")
+
+        if not doc_splits:
+            raise HTTPException(status_code=400, detail="No content could be extracted from the document")
 
         # Get book title
-        state.book_title = doc_splits[0].page_content.split('\n')[0].strip()
-        state.reader_name = reader_name
+        try:
+            state.book_title = doc_splits[0].page_content.split('\n')[0].strip()
+            state.reader_name = reader_name
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Error extracting book title: {str(e)}")
 
         print('book title', state.book_title)
         print('reader name', state.reader_name)
 
         print('initializing embedding model')
         # Initialize embedding model
-        embedding_function = get_embeddings_model()
+        try:
+            embedding_function = get_embeddings_model()
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Error initializing embedding model: {str(e)}")
 
         print('creating vectorstore')
         # Create vectorstore
-        state.vectorstore = Chroma.from_documents(
-            documents=doc_splits,
-            embedding=embedding_function,
-            collection_metadata={"hnsw:space": "cosine"},
-            client_settings=CHROMA_SETTINGS
-        )
+        collection_name = f"book_{uuid.uuid4().hex}"
+        print('collection name', collection_name)
+
+        try:
+            # First attempt with standard initialization
+            client = get_chroma_client()
+            print("Created ChromaDB client")
+            state.vectorstore = Chroma.from_documents(
+                documents=doc_splits,
+                embedding=embedding_function,
+                collection_name=collection_name,
+                collection_metadata={"hnsw:space": "cosine"},
+                client=client,
+            )
+            print("Created vectorstore successfully")
+        except Exception as e:
+            print(f"Error creating vectorstore: {e}")
+            subprocess.run(['ls', '-la', PERSIST_DIR], check=True)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error creating vector store: {str(e)}"
+            )
+
+        try:
+            print('saving book metadata', state.book_title, file.filename, collection_name)
+            save_book_metadata(state.book_title, file.filename, collection_name)
+            print('adding collection name to state', collection_name)
+            state.current_collection = collection_name
+        except Exception as e:
+            print(f"Error saving book metadata: {e}")
+            # Continue even if metadata saving fails
 
         print('custom retriever')
         # Create custom retriever
@@ -227,13 +378,14 @@ async def upload_document(file: UploadFile = File(...), reader_name: str = "Lucy
 
         print('initializing LLM')
         # Initialize LLM
-        model_local = ChatOllama(
-            model="llama3.2",
-            base_url="http://localhost:11434",
+        model_local = ChatGroq(
             temperature=state.temperature,
-            num_predict=150,
-            top_k=10,
-            top_p=0.1,
+            groq_api_key=GROQ_API_KEY,
+            model_name="llama-3.3-70b-versatile",
+            max_tokens=150,
+            model_kwargs={
+                "top_p": 0.1
+            }
         )
 
         print('creating system message')
@@ -264,10 +416,8 @@ async def upload_document(file: UploadFile = File(...), reader_name: str = "Lucy
             | StrOutputParser()
         )
 
-
         # Generate welcome message
         welcome_prompt = f"""Hi there {reader_name}! I'm so excited to talk about {state.book_title} with you!"""
-        # welcome_prompt = f"""My name is {reader_name}! I'm so excited to talk about {state.book_title} with you! Let's start talking about one (and only one) of the most important themes of the book. Ask me anything!"""
         print('welcome_prompt', welcome_prompt)
         welcome_response = state.rag_chain.invoke({
             "question": welcome_prompt,
@@ -276,17 +426,13 @@ async def upload_document(file: UploadFile = File(...), reader_name: str = "Lucy
             "book_title": state.book_title
         })
 
-        print('addding welcome message to chat history')
+        print('adding welcome message to chat history')
         # Add welcome message to chat history
         state.chat_history.append({"role": "assistant", "content": welcome_response})
 
         print('generating audio for welcome message')
         # Generate audio for welcome message
-        # audio_data = state.tts.generate(welcome_response)
         audio_data = text_to_speech_buffer(welcome_response)
-
-        # import base64
-        # audio_base64 = base64.b64encode(audio_data).decode() if audio_data else None
 
         if audio_data:
             # Generate unique filename
@@ -319,12 +465,16 @@ async def upload_document(file: UploadFile = File(...), reader_name: str = "Lucy
                 "audio": None
             }
 
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
     except Exception as e:
-        print(f"Upload error: {str(e)}")
+        print(f"Unexpected error in upload: {str(e)}")
+        import traceback
+        traceback.print_exc()
         # Clean up in case of error
         cleanup_chroma()
-        raise HTTPException(status_code=500, detail=str(e))
-
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 @app.post("/chat")
 async def chat(request: ChatRequest):
     if not state.rag_chain:
@@ -392,13 +542,197 @@ async def get_chat_history():
 
 @app.post("/clear")
 async def clear_database():
-    with db_lock:
-        try:
-            cleanup_chroma()
-            state.chat_history = []
-            return {"status": "success", "message": "Database cleared"}
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
+    """Clear all collections and reset the database"""
+    try:
+        cleanup_chroma()
+        state.chat_history = []
+        state.book_title = None
+        return {"status": "success", "message": "Database cleared"}
+    except Exception as e:
+        print(f"Error clearing database: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    print("New WebSocket connection attempt")
+    transcription_server = AudioTranscriptionServer()
+    try:
+        await transcription_server.handle_fastapi_websocket(websocket)
+    except WebSocketDisconnect:
+        print("Client disconnected normally")
+    except Exception as e:
+        print(f"WebSocket error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        print("WebSocket connection closed")
+
+@app.get("/books")
+async def list_books():
+    """Get list of available books"""
+    try:
+        books = get_available_books()
+        return {"books": books}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/books/{collection_name}/load")
+async def load_book(collection_name: str, reader_name: str = "Lucy"):
+    """Load a specific book"""
+    try:
+        # Get book metadata
+        collection = get_books_collection()
+        print('collection', collection)
+        result = collection.get(ids=[collection_name])
+        print('result', result)
+        if not result['metadatas'] or not result['metadatas'][0]:
+            raise HTTPException(status_code=404, detail="Book not found")
+
+        metadata = result['metadatas'][0]
+
+        # Load the book's vector collection
+        state.vectorstore = load_book_collection(collection_name)
+        state.current_collection = collection_name
+        state.book_title = metadata["title"]
+        state.reader_name = reader_name
+        state.chat_history = []
+
+        print('vectorstore', state.vectorstore)
+
+        # Initialize LLM and RAG chain
+        embedding_function = get_embeddings_model()
+        custom_retriever = create_custom_retriever(state.vectorstore, embedding_function)
+
+        print('embedding_function', embedding_function)
+        print('custom_retriever', custom_retriever)
+
+        print('creating model')
+        model_local = ChatGroq(
+            temperature=state.temperature,
+            groq_api_key=GROQ_API_KEY,
+            model_name="llama-3.3-70b-versatile",
+            max_tokens=150,
+            model_kwargs={"top_p": 0.1}
+        )
+
+        # Create system message and initialize chat
+        system_message = create_system_prompt(reader_name, state.book_title)
+        state.chat_history = [{"role": "system", "content": system_message}]
+
+        state.rag_chain = (
+            {
+                "context": lambda x: "\n\n".join([
+                    doc.page_content for doc in custom_retriever(
+                        x["question"] if isinstance(x, dict) else x,
+                        k=5
+                    )
+                ]),
+                "chat_history": lambda x: format_chat_history(
+                    x.get("chat_history", []) if isinstance(x, dict) else []
+                ),
+                "question": lambda x: x["question"] if isinstance(x, dict) else x,
+                "reader_name": lambda x: reader_name,
+                "book_title": lambda x: state.book_title
+            }
+            | create_dynamic_prompt()
+            | model_local
+            | StrOutputParser()
+        )
+
+        # Generate welcome message
+        welcome_prompt = f"""Hi there {reader_name}! I'm so excited to talk about {state.book_title} with you!"""
+        welcome_response = state.rag_chain.invoke({
+            "question": welcome_prompt,
+            "chat_history": state.chat_history,
+            "reader_name": reader_name,
+            "book_title": state.book_title
+        })
+
+        state.chat_history.append({"role": "assistant", "content": welcome_response})
+
+        # Generate audio for welcome message
+        print('generating audio for welcome message')
+        audio_data = text_to_speech_buffer(welcome_response)
+
+        if audio_data:
+            # Generate unique filename
+            audio_filename = f"{uuid.uuid4()}.wav"
+            audio_path = os.path.join(AUDIO_DIR, audio_filename)
+
+            # Save audio file
+            with wave.open(audio_path, 'wb') as wave_file:
+                wave_file.setnchannels(1)  # mono
+                wave_file.setsampwidth(2)  # 2 bytes per sample (16-bit)
+                wave_file.setframerate(48000)  # sample rate
+                wave_file.writeframes(audio_data)
+
+            audio_array = np.frombuffer(audio_data, dtype=np.int16)
+            audio_list = audio_array.tolist()
+
+            return {
+                "status": "success",
+                "book_title": state.book_title,
+                "welcome_message": welcome_response,
+                "audio_url": f"/audio/{audio_filename}",
+                "audio": audio_list
+            }
+        else:
+            return {
+                "status": "success",
+                "book_title": state.book_title,
+                "welcome_message": welcome_response,
+                "audio_url": None,
+                "audio": None
+            }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+def initialize_database():
+    """Initialize the database directory with correct permissions"""
+    try:
+        # Create base directory if it doesn't exist
+        os.makedirs(PERSIST_DIR, exist_ok=True)
+
+        # Set permissions for the entire directory tree
+        subprocess.run(['chmod', '-R', '777', PERSIST_DIR], check=True)
+
+        print(f"Initialized database directory: {PERSIST_DIR}")
+        # Print current permissions for debugging
+        subprocess.run(['ls', '-la', PERSIST_DIR], check=True)
+
+    except Exception as e:
+        print(f"Error initializing database: {e}")
+        raise e
+
+async def verify_database_state():
+    """Verify the database state and log available books"""
+    try:
+        books = await list_books()
+        print(f"Found {len(books.get('books', []))} books in database")
+        for book in books.get('books', []):
+            print(f"  - {book['title']}")
+    except Exception as e:
+        print(f"Error verifying database state: {e}")
+
+@app.get("/debug")
+async def debug_permissions():
+    try:
+        subprocess.run(['ls', '-la', PERSIST_DIR], check=True)
+        subprocess.run(['whoami'], check=True)
+        return {"message": "Debug info printed to logs"}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.on_event("startup")
+async def startup_event():
+    try:
+        print("Initializing database on startup...")
+        initialize_database()
+        await verify_database_state()
+    except Exception as e:
+        print(f"Error during startup: {e}")
+
 
 if __name__ == "__main__":
     import uvicorn
