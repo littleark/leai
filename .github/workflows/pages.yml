@@ -26,6 +26,9 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./ui
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -42,7 +45,6 @@ jobs:
 
       - name: Build project
         run: npm run build
-        working-directory: ui
 
       - name: Setup Pages
         uses: actions/configure-pages@v3
