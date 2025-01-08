@@ -14,7 +14,8 @@
     let audioInitialized = false;
 
     let availableBooks = [];
-    let selectedBook = null;
+    let selectedBook = "";
+    let isLoadingBook = false;
 
     $: console.log("availableBooks", availableBooks);
     $: console.log("selectedBook", selectedBook);
@@ -381,7 +382,8 @@
                                             selectedBook,
                                         )}
                                 >
-                                    <option value="">-- Select a book --</option
+                                    <option value=""
+                                        >Select a book to read together</option
                                     >
                                     {#each availableBooks as book}
                                         <option value={book.collection_name}>
@@ -391,10 +393,30 @@
                                 </select>
                                 {#if selectedBook}
                                     <button
-                                        class="load-btn"
-                                        on:click={() => loadBook(selectedBook)}
+                                        class="load-btn {isLoadingBook
+                                            ? 'loading'
+                                            : ''}"
+                                        on:click={async () => {
+                                            isLoadingBook = true;
+                                            try {
+                                                await loadBook(selectedBook);
+                                            } catch (error) {
+                                                console.error(
+                                                    "Error loading book:",
+                                                    error,
+                                                );
+                                            } finally {
+                                                isLoadingBook = false;
+                                            }
+                                        }}
+                                        disabled={isLoadingBook}
                                     >
-                                        Load Selected Book
+                                        {#if isLoadingBook}
+                                            <div class="button-spinner"></div>
+                                            Loading...
+                                        {:else}
+                                            Load Selected Book
+                                        {/if}
                                     </button>
                                 {/if}
                             </div>
@@ -649,6 +671,7 @@
 
     .audio-status {
         position: fixed;
+        display: none;
         top: 1rem;
         right: 1rem;
         padding: 0.8rem;
@@ -900,12 +923,56 @@
         background: white;
         color: #2c3e50; /* Add this for text color */
     }
+    .book-select option[value=""][disabled] {
+        color: #7f8c8d;
+    }
+
+    .book-select:invalid {
+        color: #7f8c8d;
+    }
 
     .load-btn {
         width: 100%;
         background: #3498db;
         color: white;
         margin-top: 0.5rem;
+    }
+    .load-btn.loading {
+        position: relative;
+        cursor: not-allowed;
+        opacity: 0.8;
+    }
+
+    .button-spinner {
+        display: inline-block;
+        width: 16px;
+        height: 16px;
+        border: 2px solid #ffffff;
+        border-top: 2px solid transparent;
+        border-radius: 50%;
+        margin-right: 8px;
+        animation: spin 1s linear infinite;
+        vertical-align: middle;
+    }
+
+    .load-btn.loading .button-spinner {
+        margin-right: 8px;
+    }
+
+    .load-btn {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        gap: 8px;
+    }
+
+    @keyframes spin {
+        0% {
+            transform: rotate(0deg);
+        }
+        100% {
+            transform: rotate(360deg);
+        }
     }
 
     .divider {
