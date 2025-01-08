@@ -420,9 +420,9 @@
                                     </button>
                                 {/if}
                             </div>
-                            <div class="setup-item divider">
+                            <!-- <div class="setup-item divider">
                                 <span>OR</span>
-                            </div>
+                            </div> -->
                         {/if}
 
                         <div class="setup-item">

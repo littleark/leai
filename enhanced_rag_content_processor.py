@@ -309,6 +309,9 @@ def split_into_chapters(text: str) -> List[str]:
     - Chapter 1
     - CHAPTER 1
     - Chapter One
+    - ONE
+    - TWO
+    - THREE
     etc.
 
     Args:
@@ -317,12 +320,16 @@ def split_into_chapters(text: str) -> List[str]:
     Returns:
         List[str]: A list of chapter texts
     """
+    # Define number words that might be used as chapter headers
+    number_words = r'(?:ONE|TWO|THREE|FOUR|FIVE|SIX|SEVEN|EIGHT|NINE|TEN|ELEVEN|TWELVE|THIRTEEN|FOURTEEN|FIFTEEN|SIXTEEN|SEVENTEEN|EIGHTEEN|NINETEEN|TWENTY)'
+
     # Regex patterns to match various chapter header formats
     chapter_patterns = [
         r'(?:=>—\s*(?:CHAPTER|Chapter)\s*\d+\s*—>)',  # =>— CHAPTER 1 —>
         r'(?:=>—\s*(?:CHAPTER|Chapter)\s*[A-Za-z]+\s*—>)',  # =>— CHAPTER ONE —>
         r'(?:^|\n)(?:CHAPTER|Chapter)\s*\d+\b',  # Chapter 1 or CHAPTER 1
         r'(?:^|\n)(?:CHAPTER|Chapter)\s*[A-Za-z]+\b',  # Chapter One or CHAPTER ONE
+        rf'(?:^|\n){number_words}\s*(?:\n|$)',  # ONE, TWO, THREE, etc. followed by newline
     ]
 
     # Combine patterns with case-insensitive flag

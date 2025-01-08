@@ -576,8 +576,11 @@ async def list_books():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+class LoadBookRequest(BaseModel):
+    reader_name: Optional[str] = "Lucy"
+
 @app.post("/books/{collection_name}/load")
-async def load_book(collection_name: str, reader_name: str = "Lucy"):
+async def load_book(collection_name: str, request: LoadBookRequest):
     """Load a specific book"""
     try:
         # Get book metadata
@@ -594,7 +597,7 @@ async def load_book(collection_name: str, reader_name: str = "Lucy"):
         state.vectorstore = load_book_collection(collection_name)
         state.current_collection = collection_name
         state.book_title = metadata["title"]
-        state.reader_name = reader_name
+        state.reader_name = request.reader_name
         state.chat_history = []
 
         print('vectorstore', state.vectorstore)
@@ -616,9 +619,9 @@ async def load_book(collection_name: str, reader_name: str = "Lucy"):
         )
 
         # Create system message and initialize chat
-        system_message = create_system_prompt(reader_name, state.book_title)
+        system_message = create_system_prompt(request.reader_name, state.book_title)
         state.chat_history = [{"role": "system", "content": system_message}]
-
+        print(system_message)
         state.rag_chain = (
             {
                 "context": lambda x: "\n\n".join([
@@ -631,7 +634,7 @@ async def load_book(collection_name: str, reader_name: str = "Lucy"):
                     x.get("chat_history", []) if isinstance(x, dict) else []
                 ),
                 "question": lambda x: x["question"] if isinstance(x, dict) else x,
-                "reader_name": lambda x: reader_name,
+                "reader_name": lambda x: request.reader_name,
                 "book_title": lambda x: state.book_title
             }
             | create_dynamic_prompt()
@@ -640,11 +643,11 @@ async def load_book(collection_name: str, reader_name: str = "Lucy"):
         )
 
         # Generate welcome message
-        welcome_prompt = f"""Hi there {reader_name}! I'm so excited to talk about {state.book_title} with you!"""
+        welcome_prompt = f"""Hi there {request.reader_name}! I'm so excited to talk about {state.book_title} with you!"""
         welcome_response = state.rag_chain.invoke({
             "question": welcome_prompt,
             "chat_history": state.chat_history,
-            "reader_name": reader_name,
+            "reader_name": request.reader_name,
             "book_title": state.book_title
         })
 
