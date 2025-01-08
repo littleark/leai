@@ -1,8 +1,10 @@
 import re
 from typing import List, Dict
+import json
 import os
 import PyPDF2
 from dataclasses import dataclass
+from dataclasses import asdict
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 
 @dataclass
@@ -21,6 +23,41 @@ class EnhancedContent:
     key_events: List[str]
     vocabulary: List[dict]
     discussion_points: List[str]
+
+def get_metadata_path(book_filename: str) -> str:
+    """Get the path to the metadata JSON file for a given book."""
+    # Remove the file extension from the book filename
+    base_name = os.path.splitext(book_filename)[0]
+    # Construct the path to the metadata file
+    metadata_dir = os.path.join('assets', 'metadata')
+    return os.path.join(metadata_dir, f"{base_name}.json")
+
+def load_book_metadata(book_filename: str) -> BookMetadata:
+    """Load book metadata from JSON file."""
+    metadata_path = get_metadata_path(book_filename)
+
+    try:
+        with open(metadata_path, 'r') as f:
+            metadata_dict = json.load(f)
+            return BookMetadata(**metadata_dict)
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Metadata file not found for {book_filename}. Expected at {metadata_path}")
+    except json.JSONDecodeError:
+        raise ValueError(f"Invalid JSON in metadata file: {metadata_path}")
+
+def save_book_metadata(metadata: BookMetadata, book_filename: str):
+    """Save book metadata to JSON file."""
+    metadata_path = get_metadata_path(book_filename)
+
+    # Create metadata directory if it doesn't exist
+    os.makedirs(os.path.dirname(metadata_path), exist_ok=True)
+
+    # Convert dataclass to dictionary
+    metadata_dict = asdict(metadata)
+
+    # Save to JSON file
+    with open(metadata_path, 'w') as f:
+        json.dump(metadata_dict, f, indent=2)
 
 def create_enhanced_rag_content(book_text: str, metadata: BookMetadata) -> List[dict]:
     """Create enhanced RAG content with multiple content types"""
@@ -197,6 +234,11 @@ def process_document_with_enhancements(uploaded_file, chunk_size=800, chunk_over
     # Get the file extension
     file_extension = os.path.splitext(filename)[1].lower()
 
+    try:
+        metadata = load_book_metadata(filename)
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Please ensure metadata file exists for {filename} in assets/metadata/")
+
     # Read the original book content
     # print("decoding file", filename, file_extension)
     book_text = ""
@@ -209,43 +251,6 @@ def process_document_with_enhancements(uploaded_file, chunk_size=800, chunk_over
             book_text = uploaded_file.getvalue().decode()
     except Exception as e:
         print(f"Error extracting text: {e}")
-
-    # book_text = uploaded_file.getvalue().decode()
-    # lines = book_text.split('\n')
-    # print("lines")
-    # print('\n'.join(lines[:5]))
-    # print("file decoded")
-    # Extract or provide metadata (could be from a separate upload or UI input)
-    # metadata = BookMetadata(
-    #     title=extract_title(book_text),
-    #     author=extract_author(book_text),
-    #     reading_level="ages 8-12",  # Could be determined or input
-    #     themes=extract_themes(book_text),
-    #     main_characters=extract_characters(book_text),
-    #     setting=extract_setting(book_text)
-    # )
-    #
-    metadata = BookMetadata(
-        title="The midnight gang",
-        author= "David Walliams",
-        reading_level= "Intermediate to Advanced",
-        themes= [
-            "Friendship",
-            "Imagination and Dreams",
-            "Kindness and Compassion",
-            "Overcoming Adversity",
-            "Empathy"
-        ],
-        main_characters = [
-            "Tom: A young boy and the newest member of the Midnight Gang, who initially struggles to fit in but grows through the group's adventures",
-            "Amber:  A tough and determined girl in a wheelchair who is part of the gang",
-            "Robin: A clever and kind boy who is blind and a core member of the gang",
-            "George: A gentle giant of a boy with a big heart, also a key member of the gang",
-            "Sally: A very ill girl whose dream the gang is particularly focused on fulfilling",
-            "The Porter: A mysterious and grumpy hospital worker who has a deeper role in the children’s lives than they first expect",
-            "Matron: The strict and mean-spirited head of the children’s ward, providing much of the story's conflict"
-        ],
-        setting = "The story is primarily set in a London hospital, particularly in the children's ward and various other parts of the hospital the gang explores during their nighttime adventures. The setting is both mundane and magical, reflecting the balance between the real-life challenges the children face and the fantastical escapades they create together")
 
     # metadata_JungleBook = BookMetadata(
     #     title="The Jungle Book",
