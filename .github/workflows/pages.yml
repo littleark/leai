@@ -66,6 +66,9 @@ jobs:
           <body>Redirecting...</body>
           </html>" > ui/dist/404.html
 
+      - name: List dist directory contents
+        run: ls -l ui/dist
+
       - name: Setup Pages
         uses: actions/configure-pages@v3
 
@@ -74,6 +77,9 @@ jobs:
         with:
           # Upload dist repository
           path: ui/dist
+
+      - name: List dist directory contents before Deploy
+        run: ls -l ui/dist
 
       - name: Deploy to GitHub Pages
         id: deployment
