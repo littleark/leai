@@ -32,6 +32,9 @@ import threading
 from dotenv import load_dotenv
 from AudioTranscriptionServer import AudioTranscriptionServer
 from datetime import datetime
+from uuid import uuid4
+from models import RAGState
+
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -59,18 +62,33 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Global state class
-class RAGState:
+class ConnectionManager:
     def __init__(self):
-        self.vectorstore = None
-        self.rag_chain = None
-        self.chat_history = []
-        self.book_title = None
-        self.reader_name = "Lucy"
-        # self.tts = AsyncTextToSpeech()
-        # self.transcriber = DeepgramTranscriber()
-        self.temperature = 0.0
-        self.current_collection = None
+        self.active_connections: Dict[str, WebSocket] = {}
+        self.connection_states: Dict[str, RAGState] = {}
+        self.transcription_servers: Dict[str, AudioTranscriptionServer] = {}
+
+    async def connect(self, websocket: WebSocket, client_id: str):
+        await websocket.accept()
+        self.active_connections[client_id] = websocket
+        self.connection_states[client_id] = RAGState()
+        self.transcription_servers[client_id] = AudioTranscriptionServer(
+            client_id=client_id,
+            connection_manager=self
+        )
+    def disconnect(self, client_id: str):
+        if client_id in self.active_connections:
+            del self.active_connections[client_id]
+        if client_id in self.connection_states:
+            del self.connection_states[client_id]
+        if client_id in self.transcription_servers:
+            del self.transcription_servers[client_id]
+
+    def get_state(self, client_id: str) -> RAGState:
+        return self.connection_states.get(client_id)
+
+    def get_transcription_server(self, client_id: str) -> AudioTranscriptionServer:
+        return self.transcription_servers.get(client_id)
 
 # Initialize global state
 state = RAGState()
@@ -552,20 +570,34 @@ async def clear_database():
         print(f"Error clearing database: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+manager = ConnectionManager()
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    print("New WebSocket connection attempt")
-    transcription_server = AudioTranscriptionServer()
+    client_id = str(uuid4())  # Generate unique client ID
+    print(f"New WebSocket connection attempt from client {client_id}")
+
     try:
-        await transcription_server.handle_fastapi_websocket(websocket)
+        # Connect and store client-specific state
+        await manager.connect(websocket, client_id)
+
+        transcription_server = manager.get_transcription_server(client_id)
+        if not transcription_server:
+            raise Exception(f"Failed to initialize transcription server for client {client_id}")
+
+        # Handle the WebSocket connection with client-specific state
+        await transcription_server.handle_fastapi_websocket(
+            websocket
+        )
     except WebSocketDisconnect:
-        print("Client disconnected normally")
+        print(f"Client {client_id} disconnected normally")
     except Exception as e:
-        print(f"WebSocket error: {str(e)}")
+        print(f"WebSocket error for client {client_id}: {str(e)}")
         import traceback
         traceback.print_exc()
     finally:
-        print("WebSocket connection closed")
+        print(f"WebSocket connection closed for client {client_id}")
+        manager.disconnect(client_id)
 
 @app.get("/books")
 async def list_books():

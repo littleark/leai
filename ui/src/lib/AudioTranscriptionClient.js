@@ -4,9 +4,10 @@ import { connect } from "extendable-media-recorder-wav-encoder";
 export class AudioTranscriptionClient {
   static isEncoderRegistered = false;
 
-  constructor(serverUrl) {
+  constructor(serverUrl, clientId) {
     this.serverUrl = serverUrl;
     this.socket = null;
+    this.clientId = clientId;
     this.mediaRecorder = null;
     this.audioChunks = [];
     this.stream = null;  // Add this to track the media stream
@@ -21,33 +22,34 @@ export class AudioTranscriptionClient {
       await register(await connect());
       AudioTranscriptionClient.isEncoderRegistered = true;
     }
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+      this.socket = new WebSocket(`${this.serverUrl}?client_id=${this.clientId}`);
 
-    this.socket = new WebSocket(this.serverUrl);
+      this.socket.onopen = () => {
+        console.log("WebSocket connection established");
+        this.startRecording();
+      };
 
-    this.socket.onopen = () => {
-      console.log("WebSocket connection established");
-      this.startRecording();
-    };
+      this.socket.onmessage = (event) => {
+        const transcriptionResult = JSON.parse(event.data);
 
-    this.socket.onmessage = (event) => {
-      const transcriptionResult = JSON.parse(event.data);
+        if (transcriptionResult.type === "final_transcript") {
+          console.log("Final Transcript:", transcriptionResult.transcript);
+        } else {
+          this.processTranscription(transcriptionResult);
+        }
+      };
 
-      if (transcriptionResult.type === "final_transcript") {
-        console.log("Final Transcript:", transcriptionResult.transcript);
-      } else {
-        this.processTranscription(transcriptionResult);
-      }
-    };
+      this.socket.onerror = (error) => {
+        console.error("WebSocket Error:", error);
+        this.cleanup();
+      };
 
-    this.socket.onerror = (error) => {
-      console.error("WebSocket Error:", error);
-      this.cleanup();
-    };
-
-    this.socket.onclose = () => {
-      console.log("WebSocket connection closed");
-      this.cleanup();
-    };
+      this.socket.onclose = () => {
+        console.log("WebSocket connection closed");
+        this.cleanup();
+      };
+    }
   }
 
   async startRecording() {

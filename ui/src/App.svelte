@@ -32,12 +32,15 @@
     const URL = "https://littlebeez-book-companion.hf.space";
     // const URL = "http://localhost:7860";
 
+    let clientId = crypto.randomUUID();
+
     onMount(async () => {
         audioContext = new (window.AudioContext || window.webkitAudioContext)();
 
         transcriptionClient = new AudioTranscriptionClient(
             // `ws://localhost:7860/ws`,
             `wss://littlebeez-book-companion.hf.space/ws`,
+            clientId,
         );
 
         await fetchAvailableBooks();

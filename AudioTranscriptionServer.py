@@ -1,4 +1,5 @@
 import asyncio
+from models import RAGState
 from fastapi import WebSocket, WebSocketDisconnect
 from deepgram import (
     DeepgramClient,
@@ -17,7 +18,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 class AudioTranscriptionServer:
-    def __init__(self, deepgram_api_key=None, audio_save_dir='audio_chunks'):
+    def __init__(self, deepgram_api_key=None, audio_save_dir='audio_chunks', client_id=None, connection_manager=None):
+        self.client_id = client_id
+        self.connection_manager = connection_manager
+
         # Use API key from environment or parameter
         self.deepgram_api_key = deepgram_api_key or os.getenv('DEEPGRAM_API_KEY')
 
@@ -45,7 +49,7 @@ class AudioTranscriptionServer:
 
     async def handle_fastapi_websocket(self, websocket: WebSocket):
         """Handle WebSocket connection using FastAPI's WebSocket"""
-        await websocket.accept()
+
         self.current_websocket = websocket
 
         try:
@@ -114,7 +118,7 @@ class AudioTranscriptionServer:
                 self.logger.error(f"Error in message loop: {str(e)}")
 
         except Exception as e:
-            self.logger.error(f"Error in WebSocket handling: {str(e)}")
+            self.logger.error(f"Error in WebSocket handling, client {client_id}: {str(e)}")
             import traceback
             traceback.print_exc()
 
@@ -207,10 +211,14 @@ class AudioTranscriptionServer:
 
     async def send_to_chat(self, text):
         """Send transcribed text to chat endpoint"""
+        # Get the client's state if needed
+        client_state = self.connection_manager.get_state(self.client_id) if self.client_id else None
+        reader_name = client_state.reader_name if client_state else "Lucy"
+
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 self.chat_api_url,
-                json={"message": text, "reader_name": "Lucy"}  # Adjust reader_name as needed
+                json={"message": text, "reader_name": reader_name}
             ) as response:
                 return await response.json()
 
