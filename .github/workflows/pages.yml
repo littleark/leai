@@ -40,31 +40,6 @@ jobs:
       - name: Build project
         run: npm run build
 
-      - name: Ensure dist directory exists
-        run: mkdir -p ui/dist
-
-      - name: Add custom 404.html
-        run: |
-          echo "<!DOCTYPE html>
-          <html>
-          <head>
-            <title>Redirecting...</title>
-            <meta http-equiv='refresh' content='0; URL=/leai/' />
-            <script>
-              const path = window.location.pathname;
-              if (path === '/leai/ui/') {
-                window.location.replace('/leai/');
-              } else {
-                window.location.replace('/leai/');
-              }
-            </script>
-          </head>
-          <body>Redirecting...</body>
-          </html>" > ui/dist/404.html
-
-      - name: List dist directory contents
-        run: ls -l ui/dist
-
       - name: Setup Pages
         uses: actions/configure-pages@v3
 
