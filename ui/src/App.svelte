@@ -350,10 +350,7 @@
     </header>
 
     {#if showUploadModal}
-        <div
-            class="modal-backdrop"
-            on:click|self={() => !isUploading && (showUploadModal = false)}
-        >
+        <div class="modal-backdrop">
             <div class="modal">
                 {#if isUploading}
                     <div class="loading-container">
