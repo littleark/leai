@@ -433,7 +433,7 @@
                             </div> -->
                         {/if}
 
-                        <div class="setup-item">
+                        <!-- <div class="setup-item">
                             <label for="book-upload">Upload a new book</label>
                             <div class="file-upload">
                                 <input
@@ -444,7 +444,7 @@
                                     on:change={() => (file = file)}
                                 />
                             </div>
-                        </div>
+                        </div> -->
                         <div class="modal-actions">
                             <!-- <button
                                 class="cancel-btn"
