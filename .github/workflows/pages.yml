@@ -30,6 +30,19 @@ jobs:
       run:
         working-directory: ui
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Install dependencies
+        run: npm install
+
       - name: Add custom 404.html
         run: |
           mkdir -p ui/dist
@@ -49,19 +62,6 @@ jobs:
           </head>
           <body>Redirecting...</body>
           </html>" > ui/dist/404.html
-
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: 20
-          cache: 'npm'
-          cache-dependency-path: ui/package-lock.json
-
-      - name: Install dependencies
-        run: npm install
 
       - name: Build project
         run: npm run build
