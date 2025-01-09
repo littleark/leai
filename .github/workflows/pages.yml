@@ -43,9 +43,11 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      - name: Build project
+        run: npm run build
+
       - name: Add custom 404.html
         run: |
-          mkdir -p ui/dist
           echo "<!DOCTYPE html>
           <html>
           <head>
@@ -62,9 +64,6 @@ jobs:
           </head>
           <body>Redirecting...</body>
           </html>" > ui/dist/404.html
-
-      - name: Build project
-        run: npm run build
 
       - name: List dist directory contents
         run: ls -l ui/dist
