@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 import uuid
@@ -34,7 +34,7 @@ from AudioTranscriptionServer import AudioTranscriptionServer
 from datetime import datetime
 from uuid import uuid4
 from models import RAGState
-
+from datetime import datetime, timedelta
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -62,11 +62,25 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+class ClientRequest(BaseModel):
+    client_id: str
+    reader_name: Optional[str] = "Lucy"
+
+class ChatRequest(BaseModel):
+    message: str
+    client_id: str  # Add client_id to chat requests
+    reader_name: Optional[str] = "Lucy"
+
+class LoadBookRequest(BaseModel):
+    client_id: str  # Add client_id to load book requests
+    reader_name: Optional[str] = "Lucy"
+
 class ConnectionManager:
     def __init__(self):
         self.active_connections: Dict[str, WebSocket] = {}
         self.connection_states: Dict[str, RAGState] = {}
         self.transcription_servers: Dict[str, AudioTranscriptionServer] = {}
+        self.last_activity: Dict[str, datetime] = {}
 
     async def connect(self, websocket: WebSocket, client_id: str):
         await websocket.accept()
@@ -89,6 +103,20 @@ class ConnectionManager:
 
     def get_transcription_server(self, client_id: str) -> AudioTranscriptionServer:
         return self.transcription_servers.get(client_id)
+
+    async def cleanup_inactive_clients(self):
+        """Remove clients that haven't been active for more than 1 hour"""
+        now = datetime.now()
+        inactive_clients = [
+            client_id for client_id, last_active in self.last_activity.items()
+            if now - last_active > timedelta(hours=1)
+        ]
+        for client_id in inactive_clients:
+            self.disconnect(client_id)
+
+    def update_activity(self, client_id: str):
+        """Update the last activity time for a client"""
+        self.last_activity[client_id] = datetime.now()
 
 # Initialize global state
 state = RAGState()
@@ -113,10 +141,6 @@ class Book(BaseModel):
 class ChatMessage(BaseModel):
     role: str
     content: str
-
-class ChatRequest(BaseModel):
-    message: str
-    reader_name: Optional[str] = "Lucy"
 
 def format_chat_history(chat_history: List[Dict], max_length: int = 4) -> str:
     """Format chat history for RAG context."""
@@ -315,14 +339,19 @@ def get_chroma_client():
     ))
 
 @app.post("/upload")
-async def upload_document(file: UploadFile = File(...), reader_name: str = "Lucy"):
+async def upload_document(file: UploadFile = File(...), client_id: str = Form(...), reader_name: str = "Lucy"):
     try:
         # Clean up existing ChromaDB and state
-        initialize_database()
+        # initialize_database()
+        # Get or create client state
+        client_state = manager.connection_states.get(client_id)
+        if not client_state:
+            client_state = RAGState()
+            manager.connection_states[client_id] = client_state
 
-        state.chat_history = []
-        state.rag_chain = None
-        state.book_title = None
+        client_state.chat_history = []
+        client_state.rag_chain = None
+        client_state.book_title = None
 
         # Read file content
         try:
@@ -341,13 +370,13 @@ async def upload_document(file: UploadFile = File(...), reader_name: str = "Lucy
 
         # Get book title
         try:
-            state.book_title = doc_splits[0].page_content.split('\n')[0].strip()
-            state.reader_name = reader_name
+            client_state.book_title = doc_splits[0].page_content.split('\n')[0].strip()
+            client_state.reader_name = reader_name
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Error extracting book title: {str(e)}")
 
-        print('book title', state.book_title)
-        print('reader name', state.reader_name)
+        print('book title', client_state.book_title)
+        print('reader name', client_state.reader_name)
 
         print('initializing embedding model')
         # Initialize embedding model
@@ -382,8 +411,8 @@ async def upload_document(file: UploadFile = File(...), reader_name: str = "Lucy
             )
 
         try:
-            print('saving book metadata', state.book_title, file.filename, collection_name)
-            save_book_metadata(state.book_title, file.filename, collection_name)
+            print('saving book metadata', client_state.book_title, file.filename, collection_name)
+            save_book_metadata(client_state.book_title, file.filename, collection_name)
             print('adding collection name to state', collection_name)
             state.current_collection = collection_name
         except Exception as e:
@@ -408,13 +437,13 @@ async def upload_document(file: UploadFile = File(...), reader_name: str = "Lucy
 
         print('creating system message')
         # Create system message
-        system_message = create_system_prompt(reader_name, state.book_title)
+        system_message = create_system_prompt(reader_name, client_state.book_title)
         print('system message', system_message)
-        state.chat_history = [{"role": "system", "content": system_message}]
+        client_state.chat_history = [{"role": "system", "content": system_message}]
 
         print('creating RAG chain')
         # Create RAG chain
-        state.rag_chain = (
+        client_state.rag_chain = (
             {
                 "context": lambda x: "\n\n".join([
                     doc.page_content for doc in custom_retriever(
@@ -435,18 +464,18 @@ async def upload_document(file: UploadFile = File(...), reader_name: str = "Lucy
         )
 
         # Generate welcome message
-        welcome_prompt = f"""Hi there {reader_name}! I'm so excited to talk about {state.book_title} with you!"""
+        welcome_prompt = f"""Hi there {reader_name}! I'm so excited to talk about {client_state.book_title} with you!"""
         print('welcome_prompt', welcome_prompt)
-        welcome_response = state.rag_chain.invoke({
+        welcome_response = client_state.rag_chain.invoke({
             "question": welcome_prompt,
-            "chat_history": state.chat_history,
+            "chat_history": client_state.chat_history,
             "reader_name": reader_name,
-            "book_title": state.book_title
+            "book_title": client_state.book_title
         })
 
         print('adding welcome message to chat history')
         # Add welcome message to chat history
-        state.chat_history.append({"role": "assistant", "content": welcome_response})
+        client_state.chat_history.append({"role": "assistant", "content": welcome_response})
 
         print('generating audio for welcome message')
         # Generate audio for welcome message
@@ -469,7 +498,7 @@ async def upload_document(file: UploadFile = File(...), reader_name: str = "Lucy
 
             return {
                 "status": "success",
-                "book_title": state.book_title,
+                "book_title": client_state.book_title,
                 "welcome_message": welcome_response,
                 "audio_url": f"/audio/{audio_filename}",
                 "audio": audio_list
@@ -477,7 +506,7 @@ async def upload_document(file: UploadFile = File(...), reader_name: str = "Lucy
         else:
             return {
                 "status": "success",
-                "book_title": state.book_title,
+                "book_title": client_state.book_title,
                 "welcome_message": welcome_response,
                 "audio_url": None,
                 "audio": None
@@ -493,28 +522,31 @@ async def upload_document(file: UploadFile = File(...), reader_name: str = "Lucy
         # Clean up in case of error
         cleanup_chroma()
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
 @app.post("/chat")
 async def chat(request: ChatRequest):
-    if not state.rag_chain:
+    client_state = manager.connection_states.get(request.client_id)
+    if not client_state or not client_state.rag_chain:
         raise HTTPException(status_code=400, detail="Please upload a document first")
 
     try:
         print('adding user message to history', request.message)
         # Add user message to history
-        state.chat_history.append({"role": "user", "content": request.message})
+        client_state.chat_history.append({"role": "user", "content": request.message})
 
         print('generating response invoking rag_chain')
         # Generate response
-        response = state.rag_chain.invoke({
+        response = client_state.rag_chain.invoke({
             "question": request.message,
-            "chat_history": state.chat_history,
+            "chat_history": client_state.chat_history,
             "reader_name": request.reader_name,
-            "book_title": state.book_title
+            "book_title": client_state.book_title
         })
 
         print('adding response to history', response)
         # Add response to history
-        state.chat_history.append({"role": "assistant", "content": response})
+        client_state.chat_history.append({"role": "assistant", "content": response})
 
         # Generate audio
         # audio_data = None; # state.tts.generate(response)
@@ -556,7 +588,8 @@ async def chat(request: ChatRequest):
 
 @app.get("/chat-history")
 async def get_chat_history():
-    return {"history": state.chat_history}
+    client_state = manager.connection_states.get(request.client_id)
+    return {"history": client_state.chat_history}
 
 @app.post("/clear")
 async def clear_database():
@@ -608,13 +641,14 @@ async def list_books():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-class LoadBookRequest(BaseModel):
-    reader_name: Optional[str] = "Lucy"
-
 @app.post("/books/{collection_name}/load")
 async def load_book(collection_name: str, request: LoadBookRequest):
     """Load a specific book"""
     try:
+        client_state = manager.connection_states.get(request.client_id)
+        if not client_state:
+            client_state = RAGState()
+            manager.connection_states[request.client_id] = client_state
         # Get book metadata
         collection = get_books_collection()
         print('collection', collection)
@@ -627,10 +661,10 @@ async def load_book(collection_name: str, request: LoadBookRequest):
 
         # Load the book's vector collection
         state.vectorstore = load_book_collection(collection_name)
-        state.current_collection = collection_name
-        state.book_title = metadata["title"]
-        state.reader_name = request.reader_name
-        state.chat_history = []
+        client_state.current_collection = collection_name
+        client_state.book_title = metadata["title"]
+        client_state.reader_name = request.reader_name
+        client_state.chat_history = []
 
         print('vectorstore', state.vectorstore)
 
@@ -651,10 +685,10 @@ async def load_book(collection_name: str, request: LoadBookRequest):
         )
 
         # Create system message and initialize chat
-        system_message = create_system_prompt(request.reader_name, state.book_title)
-        state.chat_history = [{"role": "system", "content": system_message}]
+        system_message = create_system_prompt(request.reader_name, client_state.book_title)
+        client_state.chat_history = [{"role": "system", "content": system_message}]
         print(system_message)
-        state.rag_chain = (
+        client_state.rag_chain = (
             {
                 "context": lambda x: "\n\n".join([
                     doc.page_content for doc in custom_retriever(
@@ -667,7 +701,7 @@ async def load_book(collection_name: str, request: LoadBookRequest):
                 ),
                 "question": lambda x: x["question"] if isinstance(x, dict) else x,
                 "reader_name": lambda x: request.reader_name,
-                "book_title": lambda x: state.book_title
+                "book_title": lambda x: client_state.book_title
             }
             | create_dynamic_prompt()
             | model_local
@@ -675,15 +709,15 @@ async def load_book(collection_name: str, request: LoadBookRequest):
         )
 
         # Generate welcome message
-        welcome_prompt = f"""Hi there {request.reader_name}! I'm so excited to talk about {state.book_title} with you!"""
-        welcome_response = state.rag_chain.invoke({
+        welcome_prompt = f"""Hi there {request.reader_name}! I'm so excited to talk about {client_state.book_title} with you!"""
+        welcome_response = client_state.rag_chain.invoke({
             "question": welcome_prompt,
-            "chat_history": state.chat_history,
+            "chat_history": client_state.chat_history,
             "reader_name": request.reader_name,
-            "book_title": state.book_title
+            "book_title": client_state.book_title
         })
 
-        state.chat_history.append({"role": "assistant", "content": welcome_response})
+        client_state.chat_history.append({"role": "assistant", "content": welcome_response})
 
         # Generate audio for welcome message
         print('generating audio for welcome message')
@@ -706,7 +740,7 @@ async def load_book(collection_name: str, request: LoadBookRequest):
 
             return {
                 "status": "success",
-                "book_title": state.book_title,
+                "book_title": client_state.book_title,
                 "welcome_message": welcome_response,
                 "audio_url": f"/audio/{audio_filename}",
                 "audio": audio_list
@@ -714,7 +748,7 @@ async def load_book(collection_name: str, request: LoadBookRequest):
         else:
             return {
                 "status": "success",
-                "book_title": state.book_title,
+                "book_title": client_state.book_title,
                 "welcome_message": welcome_response,
                 "audio_url": None,
                 "audio": None
@@ -759,14 +793,91 @@ async def debug_permissions():
     except Exception as e:
         return {"error": str(e)}
 
+async def periodic_cleanup():
+    while True:
+        await asyncio.sleep(3600)  # Run every hour
+        await manager.cleanup_inactive_clients()
+
 @app.on_event("startup")
 async def startup_event():
     try:
         print("Initializing database on startup...")
         initialize_database()
         await verify_database_state()
+
+        # Start periodic cleanup
+        asyncio.create_task(periodic_cleanup())
     except Exception as e:
         print(f"Error during startup: {e}")
+
+def delete_book_collection(collection_name: str):
+    """Delete a specific book collection from ChromaDB"""
+    try:
+        client = get_chroma_client()
+        # Delete the vector collection
+        client.delete_collection(name=collection_name)
+
+        # Remove from books metadata collection
+        books_collection = get_books_collection()
+        if books_collection:
+            books_collection.delete(ids=[collection_name])
+
+        print(f"Deleted collection: {collection_name}")
+        return True
+    except Exception as e:
+        print(f"Error deleting collection {collection_name}: {e}")
+        return False
+
+def delete_all_collections():
+    """Delete all book collections and reset the database"""
+    try:
+        client = get_chroma_client()
+
+        # Get list of all collections
+        collections = client.list_collections()
+
+        # Delete each collection
+        for collection in collections:
+            if collection.name != "books_metadata":  # Preserve the metadata collection
+                client.delete_collection(name=collection.name)
+
+        # Reset the books metadata collection
+        books_collection = get_books_collection()
+        if books_collection:
+            # Get all document IDs first
+            results = books_collection.get()
+            if results and results['ids']:
+                # Delete all documents by their IDs
+                books_collection.delete(ids=results['ids'])
+
+        return True
+    except Exception as e:
+        print(f"Error deleting all collections: {e}")
+        return False
+
+@app.delete("/books/{collection_name}")
+async def delete_book(collection_name: str):
+    """Delete a specific book"""
+    try:
+        success = delete_book_collection(collection_name)
+        if success:
+            return {"status": "success", "message": f"Book {collection_name} deleted successfully"}
+        else:
+            raise HTTPException(status_code=500, detail="Failed to delete book")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/books")
+async def delete_all_books():
+    """Delete all books"""
+    try:
+        success = delete_all_collections()
+        if success:
+            return {"status": "success", "message": "All books deleted successfully"}
+        else:
+            raise HTTPException(status_code=500, detail="Failed to delete all books")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 if __name__ == "__main__":

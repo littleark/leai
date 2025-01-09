@@ -29,8 +29,8 @@
         isLoading: true,
     };
 
-    const URL = "https://littlebeez-book-companion.hf.space";
-    // const URL = "http://localhost:7860";
+    // const URL = "https://littlebeez-book-companion.hf.space";
+    const URL = "http://localhost:7860";
 
     let clientId = crypto.randomUUID();
 
@@ -38,8 +38,8 @@
         audioContext = new (window.AudioContext || window.webkitAudioContext)();
 
         transcriptionClient = new AudioTranscriptionClient(
-            // `ws://localhost:7860/ws`,
-            `wss://littlebeez-book-companion.hf.space/ws`,
+            `ws://localhost:7860/ws`,
+            // `wss://littlebeez-book-companion.hf.space/ws`,
             clientId,
         );
 
@@ -65,7 +65,10 @@
                     headers: {
                         "Content-Type": "application/json",
                     },
-                    body: JSON.stringify({ reader_name: readerName }),
+                    body: JSON.stringify({
+                        reader_name: readerName,
+                        client_id: clientId,
+                    }),
                 },
             );
 
@@ -97,6 +100,7 @@
         const formData = new FormData();
         formData.append("file", file[0]);
         formData.append("reader_name", readerName);
+        formData.append("client_id", clientId);
 
         try {
             const response = await fetch(`${URL}/upload`, {
@@ -143,6 +147,7 @@
                 body: JSON.stringify({
                     message,
                     reader_name: readerName,
+                    client_id: clientId,
                 }),
             });
 
@@ -428,7 +433,7 @@
                             </div> -->
                         {/if}
 
-                        <!-- <div class="setup-item">
+                        <div class="setup-item">
                             <label for="book-upload">Upload a new book</label>
                             <div class="file-upload">
                                 <input
@@ -439,7 +444,7 @@
                                     on:change={() => (file = file)}
                                 />
                             </div>
-                        </div> -->
+                        </div>
                         <div class="modal-actions">
                             <!-- <button
                                 class="cancel-btn"
